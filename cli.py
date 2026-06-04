@@ -67,4 +67,8 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.stderr.write("\nOperation cancelled by user.\n")
+        sys.exit(130)
