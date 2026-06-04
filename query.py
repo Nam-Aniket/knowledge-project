@@ -4,12 +4,19 @@ import sys
 import argparse
 import numpy as np
 from dotenv import load_dotenv
+from rich.console import Console
+from rich.table import Table
+from rich.markdown import Markdown
+from rich.status import Status
 
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from db import get_connection, get_all_embeddings_with_chunks
 from llm_client import LLMClient
+
+# Initialize rich console
+console = Console()
 
 # Load environment variables
 load_dotenv()
@@ -58,14 +65,14 @@ def main():
     
     db_path = args.db_path or os.getenv("DATABASE_PATH", "data/knowledge.db")
     if not os.path.exists(db_path):
-        print(f"Error: Database file '{db_path}' not found. Please ingest some files first.")
+        console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' not found. Please ingest some files first.", file=sys.stderr)
         sys.exit(1)
         
     # Initialize LLM client
     try:
         llm = LLMClient()
     except Exception as e:
-        print(f"Error initializing LLM client: {e}")
+        console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}", file=sys.stderr)
         sys.exit(1)
         
     # Fetch all records
@@ -76,19 +83,34 @@ def main():
         conn.close()
         
     if not records:
-        print("Database is empty. Please run ingest.py to add documents first.")
+        console.print("[bold yellow]Warning:[/bold yellow] Database is empty. Please run ingest.py to add documents first.")
         sys.exit(0)
         
     if not args.query and not args.chat:
         # Show database status
-        titles = set(r["source_title"] for r in records)
-        print("=== Database Status ===")
-        print(f"Database Path  : {db_path}")
-        print(f"Total Sources  : {len(titles)}")
-        for t in titles:
-            print(f" - {t}")
-        print(f"Total Chunks   : {len(records)}")
-        print("=======================")
+        console.print("\n[bold green]📊 Database Status[/bold green]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Property", style="dim", width=25)
+        table.add_column("Value")
+        
+        table.add_row("Database Path", db_path)
+        table.add_row("Total Chunks", str(len(records)))
+        
+        # Unique sources details
+        sources_info = {}
+        for r in records:
+            title = r["source_title"]
+            author = r["source_author"]
+            sources_info[title] = author
+            
+        table.add_row("Total Ingested Books", str(len(sources_info)))
+        console.print(table)
+        
+        console.print("\n[bold cyan]📚 Ingested Books Catalog:[/bold cyan]")
+        for title, author in sources_info.items():
+            book_chunks = sum(1 for r in records if r["source_title"] == title)
+            console.print(f" - [bold]{title}[/bold] by {author} [dim]({book_chunks} chunks)[/dim]")
+        console.print("")
         sys.exit(0)
         
     system_instruction = (
@@ -99,90 +121,93 @@ def main():
     )
     
     if args.chat:
-        print("\n=== Chat Mode Activated ===")
-        print("Ask any questions about your ingested books. Type 'exit' or 'quit' to end.\n")
+        console.print("\n[bold green]=== Chat Mode Activated ===[/bold green]")
+        console.print("Ask any questions about your ingested books. Type [bold red]'exit'[/bold red] or [bold red]'quit'[/bold red] to end.\n")
         chat_history = []
         
         while True:
             try:
-                user_input = input("You > ")
+                user_input = console.input("[bold blue]You[/bold blue] > ")
             except (KeyboardInterrupt, EOFError):
-                print("\nGoodbye!")
+                console.print("\n[bold yellow]Goodbye![/bold yellow]")
                 break
                 
             if user_input.strip().lower() in ["exit", "quit"]:
-                print("Goodbye!")
+                console.print("[bold yellow]Goodbye![/bold yellow]")
                 break
                 
             if not user_input.strip():
                 continue
                 
             # Perform RAG
-            q_vector = llm.get_embedding(user_input)
-            similarities = calculate_similarities(q_vector, records)
-            
-            context_str = format_context(similarities, top_n=args.top)
-            
-            # Prepare conversation prompt
-            history_str = ""
-            for role, text in chat_history[-6:]:  # last 3 rounds
-                history_str += f"{role}: {text}\n"
-                
-            prompt = (
-                f"### RETRIEVED CONTEXT FROM BOOKS:\n{context_str}\n\n"
-                f"### CONVERSATION HISTORY:\n{history_str}"
-                f"User: {user_input}\n"
-                f"Assistant:"
-            )
-            
-            print("\nThinking...")
             try:
-                response = llm.generate_completion(system_instruction, prompt)
-                print(f"\nAssistant > {response}\n")
+                with console.status("[bold cyan]Retrieving context and thinking...") as status:
+                    q_vector = llm.get_embedding(user_input)
+                    similarities = calculate_similarities(q_vector, records)
+                    context_str = format_context(similarities, top_n=args.top)
+                    
+                    # Prepare conversation prompt
+                    history_str = ""
+                    for role, text in chat_history[-6:]:
+                        history_str += f"{role}: {text}\n"
+                        
+                    prompt = (
+                        f"### RETRIEVED CONTEXT FROM BOOKS:\n{context_str}\n\n"
+                        f"### CONVERSATION HISTORY:\n{history_str}"
+                        f"User: {user_input}\n"
+                        f"Assistant:"
+                    )
+                    response = llm.generate_completion(system_instruction, prompt)
+                
+                # Render LLM output
+                console.print("\n[bold purple]Assistant[/bold purple] >")
+                console.print(Markdown(response))
+                console.print("")
                 
                 # Show sources used
-                print("📚 Sources:")
+                sources_list = []
                 for r, score in similarities[:args.top]:
                     if score > 0.3:
-                        print(f" - '{r['source_title']}' (Score: {score:.2f})")
-                print("="*40 + "\n")
+                        sources_list.append(f"'{r['source_title']}' [dim](Similarity: {score:.2f})[/dim]")
+                
+                if sources_list:
+                    console.print(f"[dim]📚 Sources cited: {', '.join(sources_list)}[/dim]")
+                console.print("[dim]" + "-" * 50 + "[/dim]\n")
                 
                 chat_history.append(("User", user_input))
                 chat_history.append(("Assistant", response))
             except Exception as e:
-                print(f"Error generating answer: {e}\n")
+                console.print(f"[bold red]Error generating answer:[/bold red] {e}\n")
                 
     else:
         # Single query mode
         query_text = args.query
-        print(f"Query: '{query_text}'")
-        print("Searching database and embedding query...")
+        console.print(f"\n[bold]Query:[/bold] [cyan]'{query_text}'[/cyan]")
         
-        q_vector = llm.get_embedding(query_text)
-        similarities = calculate_similarities(q_vector, records)
-        
-        context_str = format_context(similarities, top_n=args.top)
-        
-        prompt = (
-            f"### RETRIEVED CONTEXT FROM BOOKS:\n{context_str}\n\n"
-            f"User Query: {query_text}"
-        )
-        
-        print("Generating synthesized response...")
         try:
-            response = llm.generate_completion(system_instruction, prompt)
-            print("\n" + "="*40)
-            print("ANSWER:")
-            print("="*40)
-            print(response)
-            print("="*40)
+            with console.status("[bold cyan]Searching database and synthesizing response...") as status:
+                q_vector = llm.get_embedding(query_text)
+                similarities = calculate_similarities(q_vector, records)
+                context_str = format_context(similarities, top_n=args.top)
+                
+                prompt = (
+                    f"### RETRIEVED CONTEXT FROM BOOKS:\n{context_str}\n\n"
+                    f"User Query: {query_text}"
+                )
+                response = llm.generate_completion(system_instruction, prompt)
+                
+            console.print("\n" + "=" * 50)
+            console.print("[bold green]ANSWER:[/bold green]")
+            console.print("=" * 50)
+            console.print(Markdown(response))
+            console.print("=" * 50)
             
-            print("\n📚 Context Sources Used:")
+            console.print("\n[bold]📚 Context Sources Cited:[/bold]")
             for r, score in similarities[:args.top]:
-                print(f" - '{r['source_title']}' by {r['source_author']} (Similarity: {score:.4f})")
-            print("="*40)
+                console.print(f" - [bold]{r['source_title']}[/bold] by {r['source_author']} [dim](Similarity: {score:.4f})[/dim]")
+            console.print("=" * 50 + "\n")
         except Exception as e:
-            print(f"Error generating answer: {e}")
+            console.print(f"[bold red]Error generating answer:[/bold red] {e}")
 
 if __name__ == "__main__":
     main()
