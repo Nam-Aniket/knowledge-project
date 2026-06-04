@@ -158,7 +158,7 @@ def main():
                                 {
                                     "name": "query",
                                     "description": "The search query or question to ask the database (e.g. 'writing tips')",
-                                    "required": True
+                                    "required": False
                                 },
                                 {
                                     "name": "topic",
@@ -189,22 +189,33 @@ def main():
                         top = 5
                         
                     if not query:
-                        raise ValueError("The 'query' argument is required.")
-                        
-                    text_result = search_knowledge_tool(query, topic, top)
-                    
-                    resp["result"] = {
-                        "description": f"Retrieved knowledge from database for: '{query}'",
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": {
-                                    "type": "text",
-                                    "text": f"Use the following retrieved notes and passages to address the query: '{query}'\n\n{text_result}"
+                        resp["result"] = {
+                            "description": "Ask a question or search for concepts across your Obsidian notes and books database.",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": {
+                                        "type": "text",
+                                        "text": "Ask a question or search for concepts across your Obsidian notes and books database. (Try typing `/psyche query='your query'` or ask me directly!)"
+                                    }
                                 }
-                            }
-                        ]
-                    }
+                            ]
+                        }
+                    else:
+                        text_result = search_knowledge_tool(query, topic, top)
+                        
+                        resp["result"] = {
+                            "description": f"Retrieved knowledge from database for: '{query}'",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": {
+                                        "type": "text",
+                                        "text": f"Use the following retrieved notes and passages to address the query: '{query}'\n\n{text_result}"
+                                    }
+                                }
+                            ]
+                        }
                 else:
                     resp["error"] = {
                         "code": -32601,

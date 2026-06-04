@@ -165,6 +165,7 @@ To expose your books and notes database directly to coding assistants, add the f
 Once integrated, the psyche server automatically exposes the `/psyche` slash command (via MCP Prompts) to your AI clients (like Codex, Claude Desktop, or Antigravity). 
 
 You can use it directly in your chat:
+*   `/psyche` — initiates the prompt command cleanly without requiring initial arguments, prompting a helpful guiding message.
 *   `/psyche query: "your question here"` — retrieves relevant book passages and notes context directly into the current chat, allowing you to ask questions and get instant wisdom inline without file creation cascades or tool approvals.
 
 ---
