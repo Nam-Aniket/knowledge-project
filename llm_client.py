@@ -38,8 +38,9 @@ def run_setup_wizard(env_path: str):
     console.print("  [bold]1[/bold]) Gemini API (Recommended - requires Gemini API Key)")
     console.print("  [bold]2[/bold]) OpenAI API (Requires OpenAI API Key)")
     console.print("  [bold]3[/bold]) Ollama (100% Offline, Local & Free - requires local Ollama service running)")
+    console.print("  [bold]4[/bold]) AI-Free (Pure Retrieval - offline-only, no API key, FTS5-only search)")
     
-    choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="1")
+    choice = Prompt.ask("Select option", choices=["1", "2", "3", "4"], default="1")
     
     provider = "gemini"
     api_key = ""
@@ -62,6 +63,10 @@ def run_setup_wizard(env_path: str):
         ollama_host = Prompt.ask("Enter Ollama Host Address", default="http://localhost:11434")
         embed_model = Prompt.ask("Enter embedding model name", default="nomic-embed-text")
         chat_model = Prompt.ask("Enter chat model name", default="llama3")
+    elif choice == "4":
+        provider = "none"
+        embed_model = "none"
+        chat_model = "none"
         
     # Write .env file
     try:
@@ -79,6 +84,9 @@ def run_setup_wizard(env_path: str):
                 f.write(f"CHAT_MODEL={chat_model}\n")
             elif provider == "ollama":
                 f.write(f"OLLAMA_HOST={ollama_host}\n")
+                f.write(f"EMBED_MODEL={embed_model}\n")
+                f.write(f"CHAT_MODEL={chat_model}\n")
+            elif provider == "none":
                 f.write(f"EMBED_MODEL={embed_model}\n")
                 f.write(f"CHAT_MODEL={chat_model}\n")
                 
@@ -105,7 +113,12 @@ class LLMClient:
         elif self.provider == "ollama":
             self.embed_model = os.getenv("EMBED_MODEL") or "nomic-embed-text"
             self.chat_model = os.getenv("CHAT_MODEL") or "llama3"
+        elif self.provider in ("none", "offline"):
+            self.provider = "none"
+            self.embed_model = "none"
+            self.chat_model = "none"
         else: # Default is gemini
+            self.provider = "gemini"
             self.embed_model = os.getenv("EMBED_MODEL") or "text-embedding-004"
             self.chat_model = os.getenv("CHAT_MODEL") or "gemini-1.5-flash"
             

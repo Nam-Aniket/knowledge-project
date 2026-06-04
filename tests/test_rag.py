@@ -113,6 +113,35 @@ class TestRAGParsers(unittest.TestCase):
             os.close(fd)
             os.unlink(path)
 
+    def test_obsidian_markdown_parsing(self):
+        from parsers import parse_obsidian_markdown
+        content = (
+            "---\n"
+            "title: Stoicism\n"
+            "tags: [philosophy, virtue, stoics]\n"
+            "---\n"
+            "# Introduction to [[Stoicism|Stoics]]\n"
+            "The ancient school of [[Stoicism]] focuses on [[Virtue]]."
+        )
+        cleaned, tags = parse_obsidian_markdown(content)
+        self.assertEqual(tags, ["philosophy", "virtue", "stoics"])
+        self.assertNotIn("---", cleaned)
+        self.assertIn("Introduction to Stoics", cleaned)
+        self.assertIn("The ancient school of Stoicism focuses on Virtue", cleaned)
+
+    def test_obsidian_yaml_tags_varied_formats(self):
+        from parsers import parse_obsidian_markdown
+        
+        # Space-separated or comma-separated tags on single line
+        content1 = "---\ntags: stoicism, philosophy\n---\nBody"
+        _, tags1 = parse_obsidian_markdown(content1)
+        self.assertEqual(tags1, ["stoicism", "philosophy"])
+        
+        # Bulleted tags list
+        content2 = "---\ntags:\n  - stoicism\n  - discipline\n---\nBody"
+        _, tags2 = parse_obsidian_markdown(content2)
+        self.assertEqual(tags2, ["stoicism", "discipline"])
+
 class TestRAGTextChunking(unittest.TestCase):
     def test_chunk_text(self):
         # Provide a longer text to make sure the chunks generated are longer than 50 characters
@@ -340,6 +369,34 @@ class TestRAGConceptGraph(unittest.TestCase):
         self.assertIn("Virtue", ctx)
         self.assertIn("values", ctx)
 
+    @mock.patch('build_graph.LLMClient')
+    def test_cooccurrence_graph_builder(self, mock_llm_class):
+        # Mock LLMClient to return provider == "none"
+        mock_llm = mock.Mock()
+        mock_llm.provider = "none"
+        mock_llm_class.return_value = mock_llm
+        
+        # Ingest chunks referencing Stoicism and Marcus Aurelius
+        db.add_source(self.conn, "Meditations", "Marcus Aurelius", "tests/dummy.txt", "checksum_meditations")
+        db.add_chunk(self.conn, 1, 0, "Marcus Aurelius was a philosopher of Stoicism.")
+        db.add_chunk(self.conn, 1, 1, "Marcus Aurelius wrote some entries on Stoicism.")
+        
+        from build_graph import build_concept_graph
+        build_concept_graph(self.db_path, num_clusters=2)
+        
+        # Verify concepts were extracted
+        concepts = db.get_all_concepts(self.conn)
+        concept_names = [c["name"] for c in concepts]
+        self.assertIn("Marcus Aurelius", concept_names)
+        self.assertIn("Stoicism", concept_names)
+        
+        # Verify links were created
+        links = db.get_concept_links(self.conn)
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0]["source"], "Marcus Aurelius")
+        self.assertEqual(links[0]["target"], "Stoicism")
+        self.assertEqual(links[0]["relationship"], "co-occurs with")
+
 class TestCLIAndRouting(unittest.TestCase):
     def setUp(self):
         self.old_argv = sys.argv.copy()
@@ -374,6 +431,38 @@ class TestCLIAndRouting(unittest.TestCase):
         self.assertEqual(os.environ.get("DATABASE_PATH"), os.path.join("data", "topic_philosophy.db"))
         self.assertEqual(sys.argv, ["knowledge", "What is Stoicism?"])
         mock_query.assert_called_once()
+
+class TestRAGPureRetrieval(unittest.TestCase):
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        db.init_db(self.db_path)
+        self.conn = db.get_connection(self.db_path)
+        
+        # Ingest a dummy document without generating embeddings
+        source_id = db.add_source(self.conn, "Offline Book", "Offline Author", "tests/dummy.txt", "checksum_offline")
+        db.add_chunk(self.conn, source_id, chunk_index=0, text="This is pure local text containing Stoic focus.", location="Chapter 1")
+
+    def tearDown(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    @mock.patch('query.LLMClient')
+    def test_pure_retrieval_query_runs_without_llm(self, mock_llm_class):
+        # Mock LLMClient to return provider == "none"
+        mock_llm = mock.Mock()
+        mock_llm.provider = "none"
+        mock_llm_class.return_value = mock_llm
+        
+        import query
+        from unittest.mock import patch
+        
+        # Mock sys.argv to run query
+        # Using sys.exit mocking to verify it runs and exits 0
+        with patch('sys.argv', ['knowledge', 'Stoic focus', '--db-path', self.db_path]), \
+             patch('sys.exit') as mock_exit:
+            query.main()
+            mock_exit.assert_called_with(0)
 
 if __name__ == "__main__":
     unittest.main()

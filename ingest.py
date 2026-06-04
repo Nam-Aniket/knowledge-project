@@ -101,7 +101,12 @@ def main():
             
         if os.path.isdir(resolved_path):
             for root, dirs, files in os.walk(resolved_path):
+                # Prune hidden and system directories in-place (starting with '.')
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                
                 for file in files:
+                    if file.startswith('.') or file.endswith(('.canvas', '.excalidraw')):
+                        continue
                     ext = os.path.splitext(file)[1].lower()
                     if ext in allowed_exts:
                         files_to_ingest.append(os.path.join(root, file))
@@ -171,32 +176,36 @@ def main():
             
             # Generate embeddings
             embeddings = []
-            batch_size = 50
-            with Progress(console=console) as progress:
-                task = progress.add_task("[cyan]Requesting API embeddings...", total=len(chunks))
-                for i in range(0, len(chunks), batch_size):
-                    sub_batch = chunks[i:i+batch_size]
-                    sub_texts = [c["text"] for c in sub_batch]
-                    try:
-                        sub_embeddings = llm_client.get_embeddings_batch(sub_texts)
-                        embeddings.extend(sub_embeddings)
-                        progress.update(task, advance=len(sub_batch))
-                    except Exception as api_err:
-                        console.print(f"\n[bold red]API Error during batch starting at chunk {i}:[/bold red] {api_err}", file=sys.stderr)
-                        raise api_err
-                        
-            if len(embeddings) != len(chunks):
-                console.print(f"[bold red]Error:[/bold red] Generated {len(embeddings)} embeddings for {len(chunks)} chunks.", file=sys.stderr)
-                failed_count += 1
-                continue
+            if llm_client.provider != "none":
+                batch_size = 50
+                with Progress(console=console) as progress:
+                    task = progress.add_task("[cyan]Requesting API embeddings...", total=len(chunks))
+                    for i in range(0, len(chunks), batch_size):
+                        sub_batch = chunks[i:i+batch_size]
+                        sub_texts = [c["text"] for c in sub_batch]
+                        try:
+                            sub_embeddings = llm_client.get_embeddings_batch(sub_texts)
+                            embeddings.extend(sub_embeddings)
+                            progress.update(task, advance=len(sub_batch))
+                        except Exception as api_err:
+                            console.print(f"\n[bold red]API Error during batch starting at chunk {i}:[/bold red] {api_err}", file=sys.stderr)
+                            raise api_err
+                            
+                if len(embeddings) != len(chunks):
+                    console.print(f"[bold red]Error:[/bold red] Generated {len(embeddings)} embeddings for {len(chunks)} chunks.", file=sys.stderr)
+                    failed_count += 1
+                    continue
+            else:
+                console.print("[yellow]AI-Free mode: Skipping embedding generation.[/yellow]")
                 
             # Write to database
             source_id = add_source(conn, title, author, path, checksum)
             with Progress(console=console) as progress:
                 task = progress.add_task("[green]Storing chunks in SQLite...", total=len(chunks))
-                for idx, (chunk_data, embedding) in enumerate(zip(chunks, embeddings)):
+                for idx, chunk_data in enumerate(chunks):
                     chunk_id = add_chunk(conn, source_id, idx, chunk_data["text"], location=chunk_data["location"])
-                    add_embedding(conn, chunk_id, embedding)
+                    if llm_client.provider != "none":
+                        add_embedding(conn, chunk_id, embeddings[idx])
                     progress.update(task, advance=1)
                     
             console.print(f"✨ [bold green]Successfully ingested:[/bold green] {title}")

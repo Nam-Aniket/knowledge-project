@@ -154,13 +154,13 @@ def get_all_embeddings_with_chunks(conn: sqlite3.Connection) -> list[dict]:
             e.embedding_blob 
         FROM chunks c
         JOIN sources s ON c.source_id = s.id
-        JOIN embeddings e ON e.chunk_id = c.id
+        LEFT JOIN embeddings e ON e.chunk_id = c.id
     """)
     rows = cursor.fetchall()
     
     results = []
     for chunk_id, text, location, source_title, source_author, blob in rows:
-        embedding = np.frombuffer(blob, dtype=np.float32)
+        embedding = np.frombuffer(blob, dtype=np.float32) if blob is not None else None
         results.append({
             "chunk_id": chunk_id,
             "text": text,
@@ -187,7 +187,7 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
             FROM chunks_fts fts
             JOIN chunks c ON fts.chunk_id = c.id
             JOIN sources s ON c.source_id = s.id
-            JOIN embeddings e ON e.chunk_id = c.id
+            LEFT JOIN embeddings e ON e.chunk_id = c.id
             WHERE chunks_fts MATCH ?
             LIMIT ?
         """, (query_text, limit))
@@ -204,7 +204,7 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
                 e.embedding_blob
             FROM chunks c
             JOIN sources s ON c.source_id = s.id
-            JOIN embeddings e ON e.chunk_id = c.id
+            LEFT JOIN embeddings e ON e.chunk_id = c.id
             WHERE c.text LIKE ?
             LIMIT ?
         """, (f"%{query_text}%", limit))
@@ -212,7 +212,7 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
         
     results = []
     for chunk_id, text, location, source_title, source_author, blob in rows:
-        embedding = np.frombuffer(blob, dtype=np.float32)
+        embedding = np.frombuffer(blob, dtype=np.float32) if blob is not None else None
         results.append({
             "chunk_id": chunk_id,
             "text": text,

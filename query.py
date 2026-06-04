@@ -34,6 +34,8 @@ def calculate_similarities(query_vector: list[float] | np.ndarray, chunk_records
     results = []
     for record in chunk_records:
         c_vec = record["embedding"]
+        if c_vec is None:
+            continue
         c_norm = np.linalg.norm(c_vec)
         if c_norm == 0:
             continue
@@ -73,8 +75,13 @@ def reciprocal_rank_fusion(semantic_results: list[tuple[dict, float]], keyword_r
 def perform_hybrid_search(db_path: str, query_text: str, semantic_records: list[dict], llm: LLMClient) -> list[tuple[dict, float]]:
     """Runs semantic and keyword search, combining them via Reciprocal Rank Fusion (RRF)."""
     # 1. Semantic search
-    q_vector = llm.get_embedding(query_text)
-    semantic_results = calculate_similarities(q_vector, semantic_records)
+    semantic_results = []
+    if llm.provider != "none":
+        try:
+            q_vector = llm.get_embedding(query_text)
+            semantic_results = calculate_similarities(q_vector, semantic_records)
+        except Exception as sem_err:
+            console.print(f"[dim]Note: Semantic search failed, falling back to keyword-only. ({sem_err})[/dim]")
     
     # 2. Keyword search
     conn = get_connection(db_path)
@@ -299,7 +306,7 @@ def main():
                 
             # Perform Hybrid RAG Search
             try:
-                with console.status("[bold cyan]Retrieving context (Hybrid Search) and thinking...") as status:
+                with console.status("[bold cyan]Retrieving context (Hybrid Search)...") as status:
                     similarities = perform_hybrid_search(db_path, clean_input, records, llm)
                     context_str = format_context(similarities, top_n=args.top)
                     
@@ -309,7 +316,31 @@ def main():
                         graph_context = retrieve_concept_context(conn, clean_input)
                     finally:
                         conn.close()
+                
+                if llm.provider == "none":
+                    console.print(f"\n[bold yellow]Offline / AI-Free (Pure Retrieval) Matches for:[/bold yellow] '{clean_input}'")
+                    if not similarities:
+                        console.print("  [dim]No matching text passages found.[/dim]")
+                    for idx, (r, score) in enumerate(similarities[:min(3, args.top)], 1):
+                        loc_suffix = f" [{r['location']}]" if r.get('location') else ""
+                        console.print(f"\n  [bold cyan][Passage {idx}][/bold cyan] '{r['source_title']}'{loc_suffix} [dim](RRF Score: {score:.4f})[/dim]")
+                        console.print("  " + "-" * 20)
+                        indented = "\n".join("      " + line for line in r['text'].strip().split("\n"))
+                        console.print(indented)
+                        console.print("  " + "-" * 20)
                         
+                    if graph_context:
+                        console.print("\n  [bold yellow]🧬 Graph Connections Found:[/bold yellow]")
+                        indented_graph = "\n".join("      " + line for line in graph_context.strip().split("\n"))
+                        console.print(indented_graph)
+                    console.print("")
+                    
+                    chat_history.append(("User", clean_input))
+                    chat_history.append(("Assistant", "[Pure Retrieval mode - showed sources]"))
+                    continue
+                        
+                # If LLM is configured, continue to generate completion
+                with console.status("[bold cyan]Thinking...") as status:
                     full_context = context_str
                     if graph_context:
                         full_context = f"{graph_context}\n\n---\n\n{context_str}"
@@ -383,7 +414,7 @@ def main():
         console.print(f"\n[bold]Query:[/bold] [cyan]'{query_text}'[/cyan]")
         
         try:
-            with console.status("[bold cyan]Searching database (Hybrid Search) and synthesizing response...") as status:
+            with console.status("[bold cyan]Searching database (Hybrid Search)...") as status:
                 similarities = perform_hybrid_search(db_path, query_text, records, llm)
                 context_str = format_context(similarities, top_n=args.top)
                 
@@ -393,7 +424,29 @@ def main():
                     graph_context = retrieve_concept_context(conn, query_text)
                 finally:
                     conn.close()
-                    
+            
+            if llm.provider == "none":
+                console.print("\n" + "=" * 50)
+                console.print("[bold yellow]OFFLINE / AI-FREE (PURE RETRIEVAL) RESULT[/bold yellow]")
+                console.print("=" * 50)
+                console.print(f"[bold green]Top {min(args.top, len(similarities))} matching passages for query:[/bold green] '{query_text}'\n")
+                if not similarities:
+                    console.print("  [dim]No matching text passages found.[/dim]\n")
+                for idx, (record, score) in enumerate(similarities[:args.top], 1):
+                    loc_suffix = f" [{record['location']}]" if record.get('location') else ""
+                    console.print(f"[bold cyan][Passage {idx}][/bold cyan] [bold]{record['source_title']}[/bold] by {record['source_author']}{loc_suffix} [dim](RRF Score: {score:.4f})[/dim]")
+                    console.print("-" * 40)
+                    console.print(Markdown(record['text']))
+                    console.print("-" * 40 + "\n")
+                
+                if graph_context:
+                    console.print("[bold yellow]🧬 Related Concept Graph Connections:[/bold yellow]")
+                    console.print(Markdown(graph_context))
+                    console.print("")
+                console.print("=" * 50 + "\n")
+                sys.exit(0)
+                
+            with console.status("[bold cyan]Synthesizing response...") as status:
                 full_context = context_str
                 if graph_context:
                     full_context = f"{graph_context}\n\n---\n\n{context_str}"

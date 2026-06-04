@@ -204,6 +204,70 @@ def extract_pdf_text(file_path: str) -> list[dict]:
         
     return pages_data
 
+def parse_obsidian_markdown(content: str) -> tuple[str, list[str]]:
+    """
+    Strips YAML frontmatter and extracts any tags listed within it.
+    Cleans wikilinks [[Target|Display]] -> Display and [[Target]] -> Target.
+    """
+    import re
+    lines = content.split('\n')
+    tags = []
+    
+    if len(lines) > 1 and lines[0].strip() == '---':
+        closing_idx = -1
+        for i in range(1, len(lines)):
+            if lines[i].strip() == '---':
+                closing_idx = i
+                break
+        
+        if closing_idx != -1:
+            frontmatter_lines = lines[1:closing_idx]
+            content_lines = lines[closing_idx+1:]
+            
+            in_tags_list = False
+            for fl in frontmatter_lines:
+                fl_stripped = fl.strip()
+                if not fl_stripped:
+                    continue
+                
+                # Check if this line starts a tags block or defines tags directly
+                if fl_stripped.startswith(('tags:', 'tag:')):
+                    val = fl_stripped.split(':', 1)[1].strip()
+                    if val.startswith('[') and val.endswith(']'):
+                        parsed_tags = [t.strip().strip('"').strip("'") for t in val[1:-1].split(',')]
+                        tags.extend([t for t in parsed_tags if t])
+                    elif val:
+                        # Space or comma-separated list of tags
+                        val_clean = val.replace(',', ' ')
+                        parsed_tags = [t.strip() for t in val_clean.split()]
+                        tags.extend([t for t in parsed_tags if t])
+                    else:
+                        in_tags_list = True
+                elif in_tags_list and fl_stripped.startswith('- '):
+                    tag_val = fl_stripped[2:].strip().strip('"').strip("'")
+                    if tag_val:
+                        tags.append(tag_val)
+                elif in_tags_list and ':' in fl_stripped:
+                    in_tags_list = False
+                    
+            content = '\n'.join(content_lines)
+            
+    # Normalize tag values (strip leading '#' if present)
+    tags = [t.lstrip('#') for t in tags]
+    
+    # Clean up wikilinks [[link]] or [[link|display]]
+    def replace_wikilink(match):
+        link_target = match.group(1).strip()
+        display_text = match.group(2)
+        if display_text:
+            return display_text.strip()
+        if '#' in link_target:
+            link_target = link_target.split('#', 1)[0].strip()
+        return link_target
+
+    cleaned_content = re.sub(r'\[\[([^\]|]+)(?:\|([^\]]+))?\]\]', replace_wikilink, content)
+    return cleaned_content, tags
+
 def extract_txt_text(file_path: str) -> list[dict]:
     """Extracts plain text from a text or markdown file, splitting by headers if possible."""
     try:
@@ -214,6 +278,9 @@ def extract_txt_text(file_path: str) -> list[dict]:
         
     ext = os.path.splitext(file_path)[1].lower()
     if ext in [".md", ".markdown"]:
+        # Strip frontmatter and clean wikilinks
+        content, tags = parse_obsidian_markdown(content)
+        
         lines = content.split('\n')
         blocks = []
         current_header = "Intro"
@@ -239,6 +306,13 @@ def extract_txt_text(file_path: str) -> list[dict]:
         blocks = [b for b in blocks if b["text"].strip()]
         if not blocks:
             blocks = [{"text": content, "location": "Full Document"}]
+            
+        # Append tags to block text to make sure they are indexed
+        if tags:
+            tag_suffix = "\n\nKeywords: " + ", ".join(tags)
+            for b in blocks:
+                b["text"] = b["text"] + tag_suffix
+                
         return blocks
     else:
         import re

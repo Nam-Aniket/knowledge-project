@@ -72,8 +72,143 @@ def clean_json_text(text: str) -> str:
         cleaned = "\n".join(lines).strip()
     return cleaned
 
+def build_cooccurrence_graph(db_path: str, min_cooccur: int = 2, max_concepts: int = 30):
+    """
+    AI-Free Fallback Graph Builder:
+    Extracts key proper nouns and concepts statistically from chunk text and links co-occurring terms.
+    """
+    import re
+    from collections import Counter
+    
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, text FROM chunks")
+    chunks = cursor.fetchall()
+    
+    if not chunks:
+        console.print("[bold red]Error:[/bold red] Database is empty. Ingest some documents first.")
+        conn.close()
+        return
+
+    console.print(f"\n[bold green]Building AI-Free Co-occurrence Graph from {len(chunks)} chunks...[/bold green]")
+    
+    # 1. Identify candidate concept words (capitalized proper nouns, Stoicism, etc.)
+    sentence_splitter = re.compile(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s')
+    candidate_counts = Counter()
+    
+    stopwords = {
+        "the", "and", "for", "with", "that", "this", "these", "those", "have", "with", "from",
+        "they", "their", "them", "were", "been", "from", "into", "some", "more", "most", "such",
+        "then", "there", "when", "where", "who", "which", "what", "how", "will", "would", "should",
+        "about", "other", "could", "would", "about", "first", "other", "their", "about", "intro",
+        "chapter", "section", "page", "volume", "book", "author", "document", "full", "here",
+        "there", "every", "many", "some", "only", "also", "into", "upon", "well", "will", "shall",
+        "your", "mine", "ours", "them", "then", "thus", "what", "where", "whom", "whose", "which"
+    }
+
+    prop_noun_regex = re.compile(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b')
+    
+    for chunk_id, text in chunks:
+        sentences = sentence_splitter.split(text)
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            
+            matches = prop_noun_regex.findall(sentence)
+            for match in matches:
+                match_lower = match.lower()
+                if match_lower in stopwords or len(match) < 3:
+                    continue
+                
+                is_sentence_start = sentence.startswith(match)
+                if is_sentence_start and match_lower in ("the", "this", "that", "there", "then", "they", "here", "when", "what", "who", "how", "but", "and", "for", "not", "our", "one", "two", "all", "she", "you", "his", "her"):
+                    continue
+                    
+                candidate_counts[match] += 1
+
+    top_candidates = [item[0] for item in candidate_counts.most_common(max_concepts)]
+    
+    if not top_candidates:
+        console.print("[bold yellow]Warning:[/bold yellow] No proper noun concepts could be identified.")
+        conn.close()
+        return
+
+    # 2. Add concepts to database
+    concept_ids = {}
+    for name in top_candidates:
+        cursor.execute("SELECT id FROM concepts WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        if row:
+            concept_ids[name] = row[0]
+        else:
+            definition = f"Key concept/theme statistically identified from the source documents."
+            cursor.execute(
+                "INSERT INTO concepts (name, definition, category) VALUES (?, ?, ?)",
+                (name, definition, "General")
+            )
+            concept_ids[name] = cursor.lastrowid
+            
+    conn.commit()
+    
+    # 3. Analyze co-occurrence in each chunk
+    links_counter = Counter()
+    for chunk_id, text in chunks:
+        matched_concepts = []
+        for name in top_candidates:
+            if re.search(r'\b' + re.escape(name) + r'\b', text):
+                matched_concepts.append(name)
+                
+        matched_concepts.sort()
+        for i in range(len(matched_concepts)):
+            for j in range(i + 1, len(matched_concepts)):
+                pair = (matched_concepts[i], matched_concepts[j])
+                links_counter[pair] += 1
+                
+    # 4. Insert links into database
+    added_links_count = 0
+    for (src, tgt), count in links_counter.items():
+        if count >= min_cooccur:
+            cursor.execute("SELECT id FROM concepts WHERE name = ?", (src,))
+            src_id = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT id FROM concepts WHERE name = ?", (tgt,))
+            tgt_id = cursor.fetchone()[0]
+            
+            cursor.execute("""
+                SELECT id FROM concept_links 
+                WHERE (source_concept_id = ? AND target_concept_id = ? AND relationship = 'co-occurs with')
+                   OR (source_concept_id = ? AND target_concept_id = ? AND relationship = 'co-occurs with')
+            """, (src_id, tgt_id, tgt_id, src_id))
+            
+            if not cursor.fetchone():
+                desc = f"Co-occurs frequently in {count} text passages."
+                cursor.execute("""
+                    INSERT INTO concept_links (source_concept_id, target_concept_id, relationship, description)
+                    VALUES (?, ?, ?, ?)
+                """, (src_id, tgt_id, "co-occurs with", desc))
+                added_links_count += 1
+                
+    conn.commit()
+    conn.close()
+    
+    console.print(f" ✅ Extracted [bold green]{len(top_candidates)}[/bold green] Concepts: {', '.join(top_candidates[:8])}")
+    console.print(f" ✅ Created [bold blue]{added_links_count}[/bold blue] Co-occurrence Links (min co-occurrence of {min_cooccur} chunks).")
+    console.print(f"\n✨ [bold green]Concept Graph Construction Completed![/bold green]\n")
+
 def build_concept_graph(db_path: str, num_clusters: int):
-    # 1. Fetch chunks and embeddings
+    # 1. LLM Setup first to check provider mode
+    try:
+        llm = LLMClient()
+    except Exception as e:
+        console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
+        sys.exit(1)
+        
+    if llm.provider == "none":
+        build_cooccurrence_graph(db_path)
+        return
+
+    # 2. Fetch chunks and embeddings
     conn = get_connection(db_path)
     try:
         records = get_all_embeddings_with_chunks(conn)
@@ -86,7 +221,7 @@ def build_concept_graph(db_path: str, num_clusters: int):
         
     console.print(f"\n[bold green]Creating GraphRAG Concept Graph from {len(records)} chunks...[/bold green]")
     
-    # 2. Extract embeddings matrix
+    # 3. Extract embeddings matrix
     embeddings_list = [r["embedding"] for r in records]
     embeddings = np.array(embeddings_list, dtype=np.float32)
     
@@ -98,13 +233,6 @@ def build_concept_graph(db_path: str, num_clusters: int):
     clusters = {c: [] for c in range(num_clusters)}
     for idx, label in enumerate(labels):
         clusters[label].append(records[idx])
-        
-    # 3. LLM Setup
-    try:
-        llm = LLMClient()
-    except Exception as e:
-        console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
-        sys.exit(1)
         
     # 4. Cluster-by-cluster extraction with sampling constraints
     conn = get_connection(db_path)
