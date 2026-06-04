@@ -1,25 +1,115 @@
 import os
+import sys
 import requests
 from dotenv import load_dotenv
+from rich.console import Console
+
+# Initialize rich console
+console = Console()
 
 # Load environment variables
 load_dotenv()
 
+def check_and_run_setup():
+    """Checks if .env is missing or unconfigured and runs an interactive setup wizard if needed."""
+    # Prevent blocking during unit testing
+    if "unittest" in sys.modules or os.getenv("TESTING") == "true":
+        return
+        
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        load_dotenv(env_path, override=True)
+        provider = os.getenv("LLM_PROVIDER")
+        if provider in ["gemini", "openai"] and os.getenv(f"{provider.upper()}_API_KEY"):
+            return
+        elif provider == "ollama":
+            return
+            
+    run_setup_wizard(env_path)
+
+def run_setup_wizard(env_path: str):
+    from rich.prompt import Prompt
+    
+    console.print("\n[bold green]🛠️ Welcome to the Knowledge CLI Setup Wizard[/bold green]")
+    console.print("Let's configure your local environment variables. This will create a `.env` file.\n")
+    
+    # Prompt for LLM Provider
+    console.print("[bold cyan]Choose your LLM / Embedding Provider:[/bold cyan]")
+    console.print("  [bold]1[/bold]) Gemini API (Recommended - requires Gemini API Key)")
+    console.print("  [bold]2[/bold]) OpenAI API (Requires OpenAI API Key)")
+    console.print("  [bold]3[/bold]) Ollama (100% Offline, Local & Free - requires local Ollama service running)")
+    
+    choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="1")
+    
+    provider = "gemini"
+    api_key = ""
+    ollama_host = "http://localhost:11434"
+    embed_model = ""
+    chat_model = ""
+    
+    if choice == "1":
+        provider = "gemini"
+        api_key = Prompt.ask("Enter your Gemini API Key", password=True)
+        embed_model = "text-embedding-004"
+        chat_model = "gemini-1.5-flash"
+    elif choice == "2":
+        provider = "openai"
+        api_key = Prompt.ask("Enter your OpenAI API Key", password=True)
+        embed_model = "text-embedding-3-small"
+        chat_model = "gpt-4o-mini"
+    elif choice == "3":
+        provider = "ollama"
+        ollama_host = Prompt.ask("Enter Ollama Host Address", default="http://localhost:11434")
+        embed_model = Prompt.ask("Enter embedding model name", default="nomic-embed-text")
+        chat_model = Prompt.ask("Enter chat model name", default="llama3")
+        
+    # Write .env file
+    try:
+        with open(env_path, "w") as f:
+            f.write(f"# Configured via Setup Wizard\n")
+            f.write(f"LLM_PROVIDER={provider}\n")
+            f.write(f"DATABASE_PATH=data/knowledge.db\n")
+            if provider == "gemini":
+                f.write(f"GEMINI_API_KEY={api_key}\n")
+                f.write(f"EMBED_MODEL={embed_model}\n")
+                f.write(f"CHAT_MODEL={chat_model}\n")
+            elif provider == "openai":
+                f.write(f"OPENAI_API_KEY={api_key}\n")
+                f.write(f"EMBED_MODEL={embed_model}\n")
+                f.write(f"CHAT_MODEL={chat_model}\n")
+            elif provider == "ollama":
+                f.write(f"OLLAMA_HOST={ollama_host}\n")
+                f.write(f"EMBED_MODEL={embed_model}\n")
+                f.write(f"CHAT_MODEL={chat_model}\n")
+                
+        console.print(f"\n✨ [bold green]Configuration saved successfully to {env_path}![/bold green]\n")
+        # Reload environment variables
+        load_dotenv(env_path, override=True)
+    except Exception as e:
+        console.print(f"[bold red]Error saving configuration file:[/bold red] {e}", file=sys.stderr)
+        sys.exit(1)
+
 class LLMClient:
     def __init__(self):
+        check_and_run_setup()
+        
         self.provider = os.getenv("LLM_PROVIDER", "gemini").lower()
         self.gemini_key = os.getenv("GEMINI_API_KEY")
         self.openai_key = os.getenv("OPENAI_API_KEY")
+        self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         
         # Configure models
         if self.provider == "openai":
             self.embed_model = os.getenv("EMBED_MODEL") or "text-embedding-3-small"
             self.chat_model = os.getenv("CHAT_MODEL") or "gpt-4o-mini"
+        elif self.provider == "ollama":
+            self.embed_model = os.getenv("EMBED_MODEL") or "nomic-embed-text"
+            self.chat_model = os.getenv("CHAT_MODEL") or "llama3"
         else: # Default is gemini
             self.embed_model = os.getenv("EMBED_MODEL") or "text-embedding-004"
             self.chat_model = os.getenv("CHAT_MODEL") or "gemini-1.5-flash"
             
-        # Verify credentials
+        # Verify credentials for API-based keys
         if self.provider == "openai" and not self.openai_key:
             raise ValueError("LLM_PROVIDER is set to 'openai' but OPENAI_API_KEY is not configured in .env.")
         elif self.provider == "gemini" and not self.gemini_key:
@@ -29,6 +119,8 @@ class LLMClient:
         """Generates a single text embedding vector."""
         if self.provider == "openai":
             return self._get_openai_embedding(text)
+        elif self.provider == "ollama":
+            return self._get_ollama_embedding(text)
         else:
             return self._get_gemini_embedding(text)
 
@@ -39,6 +131,8 @@ class LLMClient:
             
         if self.provider == "openai":
             return self._get_openai_embeddings_batch(texts)
+        elif self.provider == "ollama":
+            return self._get_ollama_embeddings_batch(texts)
         else:
             return self._get_gemini_embeddings_batch(texts)
 
@@ -46,8 +140,70 @@ class LLMClient:
         """Generates a chat completion response from the configured LLM."""
         if self.provider == "openai":
             return self._generate_openai_completion(system_instruction, prompt)
+        elif self.provider == "ollama":
+            return self._generate_ollama_completion(system_instruction, prompt)
         else:
             return self._generate_gemini_completion(system_instruction, prompt)
+
+    # --- OLLAMA IMPLEMENTATIONS ---
+    
+    def _get_ollama_embedding(self, text: str) -> list[float]:
+        # Try /api/embed first, fallback to /api/embeddings
+        try:
+            url = f"{self.ollama_host}/api/embed"
+            payload = {"model": self.embed_model, "input": text}
+            res = requests.post(url, json=payload, timeout=15)
+            if res.status_code == 200:
+                return res.json()["embeddings"][0]
+        except Exception:
+            pass
+            
+        url = f"{self.ollama_host}/api/embeddings"
+        payload = {"model": self.embed_model, "prompt": text}
+        res = requests.post(url, json=payload, timeout=15)
+        if res.status_code != 200:
+            raise RuntimeError(f"Ollama embedding API error ({res.status_code}): {res.text}")
+        return res.json()["embedding"]
+
+    def _get_ollama_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        # Try batch via /api/embed
+        try:
+            url = f"{self.ollama_host}/api/embed"
+            payload = {"model": self.embed_model, "input": texts}
+            res = requests.post(url, json=payload, timeout=30)
+            if res.status_code == 200:
+                return res.json()["embeddings"]
+        except Exception:
+            pass
+            
+        # Fallback to serial requests
+        embeddings = []
+        for t in texts:
+            embeddings.append(self._get_ollama_embedding(t))
+        return embeddings
+
+    def _generate_ollama_completion(self, system_instruction: str, prompt: str) -> str:
+        url = f"{self.ollama_host}/api/chat"
+        payload = {
+            "model": self.chat_model,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.2
+            }
+         }
+        res = requests.post(url, json=payload, timeout=45)
+        if res.status_code != 200:
+            raise RuntimeError(f"Ollama chat completion API error ({res.status_code}): {res.text}")
+            
+        data = res.json()
+        try:
+            return data["message"]["content"]
+        except (KeyError, IndexError):
+            raise RuntimeError(f"Unexpected response format from Ollama: {data}")
 
     # --- GEMINI IMPLEMENTATIONS ---
     
@@ -66,10 +222,7 @@ class LLMClient:
         return data["embedding"]["values"]
 
     def _get_gemini_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
-        # Gemini allows batching up to 100 requests in a batchEmbedContents call
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.embed_model}:batchEmbedContents?key={self.gemini_key}"
-        
-        # Batch sizes of 100
         batch_size = 100
         embeddings = []
         
@@ -86,7 +239,6 @@ class LLMClient:
             payload = {"requests": requests_list}
             res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
             if res.status_code != 200:
-                # Fallback to single requests if batch fails
                 for t in chunk_texts:
                     embeddings.append(self._get_gemini_embedding(t))
                 continue
@@ -99,8 +251,6 @@ class LLMClient:
 
     def _generate_gemini_completion(self, system_instruction: str, prompt: str) -> str:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.chat_model}:generateContent?key={self.gemini_key}"
-        
-        # Prepare system instruction and contents
         payload = {
             "contents": [
                 {
@@ -149,7 +299,6 @@ class LLMClient:
             "Content-Type": "application/json"
         }
         
-        # Batch size of 2008 for OpenAI
         batch_size = 500
         embeddings = []
         
@@ -161,13 +310,11 @@ class LLMClient:
             }
             res = requests.post(url, json=payload, headers=headers, timeout=30)
             if res.status_code != 200:
-                # Fallback to single requests if batch fails
                 for t in chunk_texts:
                     embeddings.append(self._get_openai_embedding(t))
                 continue
                 
             data = res.json()
-            # Sort data objects by index to keep alignments
             sorted_data = sorted(data.get("data", []), key=lambda x: x["index"])
             for item in sorted_data:
                 embeddings.append(item["embedding"])
