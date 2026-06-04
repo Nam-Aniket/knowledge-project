@@ -102,6 +102,16 @@ def run_setup_wizard(env_path: str):
         console.print(f"\n✨ [bold green]Configuration saved successfully to {env_path}![/bold green]\n")
         # Reload environment variables
         load_dotenv(env_path, override=True)
+        
+        # Pre-download local embedding model if chosen, to prevent first-query MCP timeouts
+        if provider == "local":
+            console.print("[cyan]Pre-downloading local ONNX embedding model (BAAI/bge-small-en-v1.5) to prevent MCP timeouts...[/cyan]")
+            try:
+                from fastembed import TextEmbedding
+                TextEmbedding(model_name=embed_model)
+                console.print("[green]✓ Model downloaded and cached successfully.[/green]\n")
+            except Exception as download_err:
+                console.print(f"[yellow]Warning: Could not pre-download model: {download_err}. It will download on first query.[/yellow]\n")
     except Exception as e:
         err_console.print(f"[bold red]Error saving configuration file:[/bold red] {e}")
         sys.exit(1)
