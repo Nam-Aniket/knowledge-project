@@ -1,0 +1,16 @@
+# Local data and secrets
+.env
+data/
+
+# Python environment and cache
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# OS files
+.DS_Store
+Thumbs.db
