@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import sys
 import os
+
+# Signal that the process is running in a non-interactive MCP context
+os.environ["PSYCHE_NONINTERACTIVE"] = "1"
+
 import json
 import traceback
 
@@ -11,7 +15,7 @@ sys.stdout = sys.stderr
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, resolve_db_path
+from db import get_connection, get_all_embeddings_with_chunks, resolve_db_path, check_and_migrate_embeddings
 from query import perform_hybrid_search, format_context, retrieve_concept_context
 from llm_client import LLMClient
 
@@ -31,10 +35,12 @@ def search_knowledge_tool(query_text, topic=None, top=5):
     try:
         # Initialize LLM Client
         llm = LLMClient()
+        check_and_migrate_embeddings(db_path, llm)
     except Exception as e:
-        log(f"Failed to initialize LLM: {e}. Falling back to offline mode.")
+        log(f"Failed to initialize LLM or migrate database: {e}. Falling back to offline mode.")
         class FakeLLM:
             provider = "none"
+            embed_model = "none"
         llm = FakeLLM()
         
     conn = get_connection(db_path)
@@ -111,6 +117,22 @@ def retrieve_graph_tool(topic=None):
 def main():
     log("Server starting on stdio transport...")
     
+    # Warm up LLM client and run migrations on startup (to prevent timeouts during first queries)
+    try:
+        db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
+        log(f"Warming up LLM Client and checking database {db_path}...")
+        llm = LLMClient()
+        check_and_migrate_embeddings(db_path, llm)
+        
+        # If using local ONNX embeddings, pre-load/download the model on startup so tool calls are instant
+        if llm.provider == "local":
+            log("Pre-loading local ONNX embedding model...")
+            llm.get_embedding("warmup")
+            
+        log("Warm up and database migration checked successfully.")
+    except Exception as e:
+        log(f"Warning during server warm up: {e}")
+    
     while True:
         try:
             line = sys.stdin.readline()
@@ -131,7 +153,8 @@ def main():
                 resp["result"] = {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "tools": {}
+                        "tools": {},
+                        "prompts": {}
                     },
                     "serverInfo": {
                         "name": "psyche-mcp",
@@ -141,6 +164,68 @@ def main():
             elif method == "notifications/initialized":
                 # Notifications don't get a response
                 continue
+            elif method == "prompts/list":
+                resp["result"] = {
+                    "prompts": [
+                        {
+                            "name": "psyche",
+                            "description": "Ask a question or search for concepts across your Obsidian notes and books database.",
+                            "arguments": [
+                                {
+                                    "name": "query",
+                                    "description": "The search query or question to ask the database (e.g. 'writing tips')",
+                                    "required": True
+                                },
+                                {
+                                    "name": "topic",
+                                    "description": "Optional topic database name (e.g. topic_<topic>.db)",
+                                    "required": False
+                                },
+                                {
+                                    "name": "top",
+                                    "description": "Optional number of results to retrieve (default is 5)",
+                                    "required": False
+                                }
+                            ]
+                        }
+                    ]
+                }
+            elif method == "prompts/get":
+                params = req.get("params", {})
+                name = params.get("name")
+                arguments = params.get("arguments", {})
+                
+                if name == "psyche":
+                    query = arguments.get("query")
+                    topic = arguments.get("topic")
+                    top_val = arguments.get("top", 5)
+                    try:
+                        top = int(top_val)
+                    except Exception:
+                        top = 5
+                        
+                    if not query:
+                        raise ValueError("The 'query' argument is required.")
+                        
+                    text_result = search_knowledge_tool(query, topic, top)
+                    
+                    resp["result"] = {
+                        "description": f"Retrieved knowledge from database for: '{query}'",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": {
+                                    "type": "text",
+                                    "text": f"Use the following retrieved notes and passages to address the query: '{query}'\n\n{text_result}"
+                                }
+                            }
+                        ]
+                    }
+                else:
+                    resp["error"] = {
+                        "code": -32601,
+                        "message": f"Prompt '{name}' not found."
+                    }
             elif method == "tools/list":
                 resp["result"] = {
                     "tools": [

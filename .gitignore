@@ -19,3 +19,4 @@ Thumbs.db
 *.egg-info/
 build/
 dist/
+scratch/

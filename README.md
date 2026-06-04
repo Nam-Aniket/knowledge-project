@@ -1,6 +1,6 @@
 # 🧠 Psyche
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/knowledge-project)
+[![Version](https://img.shields.io/badge/version-0.3.0-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/knowledge-project)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg?style=for-the-badge)](https://github.com/Nam-Aniket/knowledge-project)
 [![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](https://github.com/Nam-Aniket/knowledge-project)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Enabled-orange.svg?style=for-the-badge)](https://modelcontextprotocol.io)
@@ -160,6 +160,12 @@ To expose your books and notes database directly to coding assistants, add the f
 }
 ```
 *(Note: If you have installed the package globally using `npm install -g psyche-rag`, you can also configure it directly with command `psyche` and args `["start-mcp"]`.)*
+
+### 💬 Custom Slash Command (`/psyche`)
+Once integrated, the psyche server automatically exposes the `/psyche` slash command (via MCP Prompts) to your AI clients (like Codex, Claude Desktop, or Antigravity). 
+
+You can use it directly in your chat:
+*   `/psyche query: "your question here"` — retrieves relevant book passages and notes context directly into the current chat, allowing you to ask questions and get instant wisdom inline without file creation cascades or tool approvals.
 
 ---
 

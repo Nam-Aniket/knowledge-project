@@ -14,7 +14,7 @@ load_dotenv()
 def check_and_run_setup():
     """Checks if .env is missing or unconfigured and runs an interactive setup wizard if needed."""
     # Prevent blocking during unit testing or non-interactive environments
-    if "unittest" in sys.modules or os.getenv("TESTING") == "true" or not sys.stdin.isatty():
+    if "unittest" in sys.modules or os.getenv("TESTING") == "true" or os.getenv("PSYCHE_NONINTERACTIVE") == "1" or not sys.stdin.isatty():
         return
         
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -23,7 +23,7 @@ def check_and_run_setup():
         provider = os.getenv("LLM_PROVIDER")
         if provider in ["gemini", "openai"] and os.getenv(f"{provider.upper()}_API_KEY"):
             return
-        elif provider in ["ollama", "none"]:
+        elif provider in ["ollama", "none", "local"]:
             return
             
     run_setup_wizard(env_path)
@@ -102,6 +102,16 @@ def run_setup_wizard(env_path: str):
         console.print(f"\n✨ [bold green]Configuration saved successfully to {env_path}![/bold green]\n")
         # Reload environment variables
         load_dotenv(env_path, override=True)
+        
+        # Pre-download local embedding model if chosen, to prevent first-query MCP timeouts
+        if provider == "local":
+            console.print("[cyan]Pre-downloading local ONNX embedding model (BAAI/bge-small-en-v1.5) to prevent MCP timeouts...[/cyan]")
+            try:
+                from fastembed import TextEmbedding
+                TextEmbedding(model_name=embed_model)
+                console.print("[green]✓ Model downloaded and cached successfully.[/green]\n")
+            except Exception as download_err:
+                console.print(f"[yellow]Warning: Could not pre-download model: {download_err}. It will download on first query.[/yellow]\n")
     except Exception as e:
         err_console.print(f"[bold red]Error saving configuration file:[/bold red] {e}")
         sys.exit(1)

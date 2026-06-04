@@ -11,7 +11,7 @@ from rich.table import Table
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, add_concept, add_concept_link, resolve_db_path
+from db import get_connection, get_all_embeddings_with_chunks, add_concept, add_concept_link, resolve_db_path, check_and_migrate_embeddings
 from llm_client import LLMClient
 
 console = Console()
@@ -204,6 +204,9 @@ def build_concept_graph(db_path: str, num_clusters: int):
     except Exception as e:
         console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
         sys.exit(1)
+        
+    # Check and run database embedding migrations if LLM config changed
+    check_and_migrate_embeddings(db_path, llm)
         
     if llm.provider in ("none", "local") or llm.chat_model == "none":
         build_cooccurrence_graph(db_path)
