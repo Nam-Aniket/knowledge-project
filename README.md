@@ -66,27 +66,31 @@ flowchart TD
 
 ## 🚀 Setup & Installation
 
-### 1. Run the Setup Command (Recommended)
-Clone the repository and run the setup script:
+### 1. Install via NPM (Recommended)
+You can install the package globally using npm:
+```bash
+npm install -g psyche-rag
+```
+This automatically handles:
+1. Creating an isolated Python virtual environment (`.venv`) inside the global module directory.
+2. Installing all required Python dependencies.
+3. Exposing the global `psyche` command.
+
+Alternatively, you can run commands directly without a global installation using `npx`:
+```bash
+npx psyche-rag query "What is Stoicism?"
+```
+
+---
+
+### 2. Manual Installation (Development Mode)
+If you prefer to clone the repository manually:
 ```bash
 git clone https://github.com/Nam-Aniket/knowledge-project.git
 cd knowledge-project
 ./setup.sh
 ```
-
-This script will automatically:
-1. Initialize a Python virtual environment (`.venv`) if it doesn't exist.
-2. Install all dependencies and the package in editable mode.
-3. Link the global `psyche` command so you can run it from any directory.
-4. **Launch the Interactive Setup Wizard** to configure your model provider (Gemini, OpenAI, Ollama, or AI-Free) and API keys.
-
----
-
-### 2. Manual Installation
-If you prefer not to use the shell script, you can run the setup command directly in Python:
-```bash
-python3 cli.py setup
-```
+This script will initialize a local Python virtual environment, install dependencies in editable mode, and link the global `psyche` command.
 
 ---
 
@@ -145,15 +149,17 @@ To expose your books and notes database directly to coding assistants, add the f
 {
   "mcpServers": {
     "psyche": {
-      "command": "psyche",
+      "command": "npx",
       "args": [
+        "-y",
+        "psyche-rag",
         "start-mcp"
       ]
     }
   }
 }
 ```
-*(Note: If the global `psyche` command is not in your editor/client's environment PATH, you can use the absolute path to the virtualenv Python and script, e.g. command: `/Users/username/.psyche/.venv/bin/python` and args: `["/Users/username/.psyche/cli.py", "start-mcp"]`).*
+*(Note: If you have installed the package globally using `npm install -g psyche-rag`, you can also configure it directly with command `psyche` and args `["start-mcp"]`.)*
 
 ---
 

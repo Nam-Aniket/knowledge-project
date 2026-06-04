@@ -3,14 +3,27 @@ import os
 import numpy as np
 from datetime import datetime, timezone
 
+def resolve_db_path(db_path: str = None) -> str:
+    """Resolves relative database paths to ~/.psyche/ folder, while leaving absolute paths intact."""
+    if not db_path:
+        db_path = os.getenv("DATABASE_PATH", "knowledge.db")
+    
+    if os.path.isabs(db_path):
+        return db_path
+        
+    basename = os.path.basename(db_path)
+    home_dir = os.path.expanduser("~/.psyche")
+    return os.path.join(home_dir, basename)
+
 def init_db(db_path: str):
     """Initializes the database schema if it doesn't already exist."""
-    # Ensure data directory exists
-    db_dir = os.path.dirname(db_path)
+    resolved_path = resolve_db_path(db_path)
+    # Ensure directory exists
+    db_dir = os.path.dirname(resolved_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
         
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(resolved_path)
     cursor = conn.cursor()
     
     # Create sources table

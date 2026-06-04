@@ -12,7 +12,7 @@ from rich.table import Table
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import init_db, get_connection, check_checksum, add_source, add_chunk, add_embedding
+from db import init_db, get_connection, check_checksum, add_source, add_chunk, add_embedding, resolve_db_path
 from parsers import extract_text
 from llm_client import LLMClient
 
@@ -83,7 +83,7 @@ def main():
     if not raw_paths:
         parser.error("At least one path must be specified. Usage: knowledge ingest <path1> <path2>...")
         
-    db_path = args.db_path or os.getenv("DATABASE_PATH", "data/knowledge.db")
+    db_path = resolve_db_path(args.db_path or os.getenv("DATABASE_PATH", "knowledge.db"))
     init_db(db_path)
     
     # Check extensions

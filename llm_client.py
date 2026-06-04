@@ -74,7 +74,7 @@ def run_setup_wizard(env_path: str):
         with open(env_path, "w") as f:
             f.write(f"# Configured via Setup Wizard\n")
             f.write(f"LLM_PROVIDER={provider}\n")
-            f.write(f"DATABASE_PATH=data/knowledge.db\n")
+            f.write(f"DATABASE_PATH=knowledge.db\n")
             if provider == "gemini":
                 f.write(f"GEMINI_API_KEY={api_key}\n")
                 f.write(f"EMBED_MODEL={embed_model}\n")
