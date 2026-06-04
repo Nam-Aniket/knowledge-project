@@ -46,6 +46,14 @@ def init_db(db_path: str):
         )
     """)
     
+    # Create FTS5 virtual table for keyword search
+    cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            chunk_id UNINDEXED,
+            text
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -76,14 +84,19 @@ def add_source(conn: sqlite3.Connection, title: str, author: str | None, file_pa
     return cursor.lastrowid
 
 def add_chunk(conn: sqlite3.Connection, source_id: int, chunk_index: int, text: str) -> int:
-    """Adds a chunk of text to the database. Returns the newly created chunk ID."""
+    """Adds a chunk of text to the database and indexes it in FTS5. Returns the chunk ID."""
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO chunks (source_id, chunk_index, text) VALUES (?, ?, ?)",
         (source_id, chunk_index, text)
     )
+    chunk_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO chunks_fts (chunk_id, text) VALUES (?, ?)",
+        (chunk_id, text)
+    )
     conn.commit()
-    return cursor.lastrowid
+    return chunk_id
 
 def add_embedding(conn: sqlite3.Connection, chunk_id: int, embedding: list[float] | np.ndarray):
     """Serializes and adds an embedding vector for a specific chunk."""
@@ -113,6 +126,55 @@ def get_all_embeddings_with_chunks(conn: sqlite3.Connection) -> list[dict]:
     """)
     rows = cursor.fetchall()
     
+    results = []
+    for chunk_id, text, source_title, source_author, blob in rows:
+        embedding = np.frombuffer(blob, dtype=np.float32)
+        results.append({
+            "chunk_id": chunk_id,
+            "text": text,
+            "source_title": source_title,
+            "source_author": source_author,
+            "embedding": embedding
+        })
+    return results
+
+def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> list[dict]:
+    """Searches the FTS5 virtual table for keyword matches and returns the original chunk records."""
+    cursor = conn.cursor()
+    try:
+        # FTS5 Match query
+        cursor.execute("""
+            SELECT 
+                c.id, 
+                c.text, 
+                s.title, 
+                s.author,
+                e.embedding_blob
+            FROM chunks_fts fts
+            JOIN chunks c ON fts.chunk_id = c.id
+            JOIN sources s ON c.source_id = s.id
+            JOIN embeddings e ON e.chunk_id = c.id
+            WHERE chunks_fts MATCH ?
+            LIMIT ?
+        """, (query_text, limit))
+        rows = cursor.fetchall()
+    except sqlite3.OperationalError:
+        # Fallback to simple LIKE search if query syntax is not supported by FTS MATCH
+        cursor.execute("""
+            SELECT 
+                c.id, 
+                c.text, 
+                s.title, 
+                s.author,
+                e.embedding_blob
+            FROM chunks c
+            JOIN sources s ON c.source_id = s.id
+            JOIN embeddings e ON e.chunk_id = c.id
+            WHERE c.text LIKE ?
+            LIMIT ?
+        """, (f"%{query_text}%", limit))
+        rows = cursor.fetchall()
+        
     results = []
     for chunk_id, text, source_title, source_author, blob in rows:
         embedding = np.frombuffer(blob, dtype=np.float32)

@@ -15,7 +15,7 @@ from prompt_toolkit.completion import WordCompleter
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks
+from db import get_connection, get_all_embeddings_with_chunks, search_fts
 from llm_client import LLMClient
 
 # Initialize rich console
@@ -45,13 +45,54 @@ def calculate_similarities(query_vector: list[float] | np.ndarray, chunk_records
     results.sort(key=lambda x: x[1], reverse=True)
     return results
 
+def reciprocal_rank_fusion(semantic_results: list[tuple[dict, float]], keyword_results: list[dict], k: int = 60) -> list[tuple[dict, float]]:
+    """Combines semantic search results and keyword search results using Reciprocal Rank Fusion.
+    
+    Returns a list of (record, rrf_score) sorted by score descending.
+    """
+    rrf_scores = {}
+    
+    # 1. Rank based on semantic scores
+    for rank, (record, _) in enumerate(semantic_results, 1):
+        chunk_id = record["chunk_id"]
+        if chunk_id not in rrf_scores:
+            rrf_scores[chunk_id] = {"record": record, "score": 0.0}
+        rrf_scores[chunk_id]["score"] += 1.0 / (k + rank)
+        
+    # 2. Rank based on keyword scores
+    for rank, record in enumerate(keyword_results, 1):
+        chunk_id = record["chunk_id"]
+        if chunk_id not in rrf_scores:
+            rrf_scores[chunk_id] = {"record": record, "score": 0.0}
+        rrf_scores[chunk_id]["score"] += 1.0 / (k + rank)
+        
+    combined = [(item["record"], item["score"]) for item in rrf_scores.values()]
+    combined.sort(key=lambda x: x[1], reverse=True)
+    return combined
+
+def perform_hybrid_search(db_path: str, query_text: str, semantic_records: list[dict], llm: LLMClient) -> list[tuple[dict, float]]:
+    """Runs semantic and keyword search, combining them via Reciprocal Rank Fusion (RRF)."""
+    # 1. Semantic search
+    q_vector = llm.get_embedding(query_text)
+    semantic_results = calculate_similarities(q_vector, semantic_records)
+    
+    # 2. Keyword search
+    conn = get_connection(db_path)
+    try:
+        keyword_results = search_fts(conn, query_text, limit=30)
+    finally:
+        conn.close()
+        
+    # 3. Combine via RRF
+    return reciprocal_rank_fusion(semantic_results, keyword_results)
+
 def format_context(similar_chunks: list[tuple[dict, float]], top_n: int = 5) -> str:
     """Formats retrieved chunks into a standard RAG context block."""
     context_blocks = []
     for idx, (record, score) in enumerate(similar_chunks[:top_n], 1):
         block = (
             f"Source [{idx}]: '{record['source_title']}' by {record['source_author']}\n"
-            f"Similarity Score: {score:.4f}\n"
+            f"RRF Rank Score: {score:.4f}\n"
             f"Content:\n{record['text']}\n"
         )
         context_blocks.append(block)
@@ -188,11 +229,10 @@ def main():
                     console.print(f"[bold red]Unknown command:[/bold red] {clean_input}. Type [bold]/help[/bold] for instructions.\n")
                     continue
                 
-            # Perform RAG
+            # Perform Hybrid RAG Search
             try:
-                with console.status("[bold cyan]Retrieving context and thinking...") as status:
-                    q_vector = llm.get_embedding(clean_input)
-                    similarities = calculate_similarities(q_vector, records)
+                with console.status("[bold cyan]Retrieving context (Hybrid Search) and thinking...") as status:
+                    similarities = perform_hybrid_search(db_path, clean_input, records, llm)
                     context_str = format_context(similarities, top_n=args.top)
                     
                     # Prepare conversation prompt
@@ -213,20 +253,19 @@ def main():
                 console.print(Markdown(response))
                 console.print("")
                 
-                # Show sources used
+                # Show sources used (top unique items from the retrieved list)
                 sources_list = []
                 for r, score in similarities[:args.top]:
-                    if score > 0.3:
-                        sources_list.append(f"'{r['source_title']}' [dim](Similarity: {score:.2f})[/dim]")
+                    sources_list.append(f"'{r['source_title']}' [dim](Score: {score:.3f})[/dim]")
                 
                 if sources_list:
-                    console.print(f"[dim]📚 Sources cited: {', '.join(sources_list)}[/dim]")
+                    console.print(f"[dim]📚 Sources cited (RRF): {', '.join(sources_list)}[/dim]")
                     
                 # If show_detailed_sources toggle is enabled, print the full texts
                 if show_detailed_sources:
                     console.print("\n[bold yellow]--- DETAILED CONTEXT USED ---[/bold yellow]")
                     for idx, (r, score) in enumerate(similarities[:args.top], 1):
-                        console.print(f"\n[bold magenta][{idx}] {r['source_title']} by {r['source_author']} (Score: {score:.4f})[/bold magenta]")
+                        console.print(f"\n[bold magenta][{idx}] {r['source_title']} by {r['source_author']} (RRF: {score:.4f})[/bold magenta]")
                         console.print(f"{r['text'].strip()}")
                     console.print("[bold yellow]-----------------------------[/bold yellow]")
                     
@@ -243,9 +282,8 @@ def main():
         console.print(f"\n[bold]Query:[/bold] [cyan]'{query_text}'[/cyan]")
         
         try:
-            with console.status("[bold cyan]Searching database and synthesizing response...") as status:
-                q_vector = llm.get_embedding(query_text)
-                similarities = calculate_similarities(q_vector, records)
+            with console.status("[bold cyan]Searching database (Hybrid Search) and synthesizing response...") as status:
+                similarities = perform_hybrid_search(db_path, query_text, records, llm)
                 context_str = format_context(similarities, top_n=args.top)
                 
                 prompt = (
@@ -260,9 +298,9 @@ def main():
             console.print(Markdown(response))
             console.print("=" * 50)
             
-            console.print("\n[bold]📚 Context Sources Cited:[/bold]")
+            console.print("\n[bold]📚 Context Sources Cited (RRF):[/bold]")
             for r, score in similarities[:args.top]:
-                console.print(f" - [bold]{r['source_title']}[/bold] by {r['source_author']} [dim](Similarity: {score:.4f})[/dim]")
+                console.print(f" - [bold]{r['source_title']}[/bold] by {r['source_author']} [dim](RRF: {score:.4f})[/dim]")
             console.print("=" * 50 + "\n")
         except Exception as e:
             console.print(f"[bold red]Error generating answer:[/bold red] {e}")
