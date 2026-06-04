@@ -37,6 +37,8 @@ def calculate_similarities(query_vector: list[float] | np.ndarray, chunk_records
         c_vec = record["embedding"]
         if c_vec is None:
             continue
+        if len(c_vec) != len(q_vec):
+            continue
         c_norm = np.linalg.norm(c_vec)
         if c_norm == 0:
             continue

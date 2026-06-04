@@ -356,6 +356,16 @@ def check_and_migrate_embeddings(db_path: str, llm):
         if db_model == config_model:
             return
 
+        # If running in a non-interactive environment (like MCP server), skip heavy migration to prevent timeouts
+        import sys
+        if not sys.stdin.isatty() and "unittest" not in sys.modules and os.getenv("TESTING") != "true":
+            sys.stderr.write(
+                f"[Psyche] Mismatched embedding model detected (DB: {db_model or 'none'} vs Config: {config_model}).\n"
+                "[Psyche] Skipped automatic embedding migration in non-interactive session to prevent timeout.\n"
+                "[Psyche] Please run 'psyche query' or 'psyche ingest' in the terminal to migrate your database.\n"
+            )
+            return
+
         # We have a mismatch!
         from rich.console import Console
         from rich.progress import Progress
