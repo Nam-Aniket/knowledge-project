@@ -171,6 +171,84 @@ def retrieve_concept_context(conn: sqlite3.Connection, query_text: str) -> str:
             
     return "\n".join(concept_blocks)
 
+def show_brain_splash():
+    import time
+    from rich.live import Live
+    from rich.align import Align
+    
+    frames = [
+        # Frame 1: organic outline only (dim)
+        """[dim purple]
+                 .---
+              .-'        
+            .-'          
+           /             
+          |              
+          |              
+           \\             
+            '-.          
+               '-.       
+                  '---
+        [/dim purple]""",
+        # Frame 2: organic structure forms
+        """[purple]
+                 .---~~~~
+              .-'  .  .  
+            .-'   /    \\ 
+           /     |     / 
+          |       \\___/  
+          |       /   \\  
+           \\     |     \\ 
+            '-.   \\___/  
+               '-.       
+                  '---___
+        [/purple]""",
+        # Frame 3: organic glows (cyan), digital blocks start appearing (dim grey blocks)
+        """[bold cyan]                 _---~~~~[/bold cyan]  [dim white]░░░░[/dim white]
+[bold cyan]              _-'  _.._  [/bold cyan]  [dim white]░░░░░░[/dim white]
+[bold cyan]            _-'   /    \\ [/bold cyan]  [dim white]░░░░░░░░[/dim white]
+[bold cyan]           /     |  o  / [/bold cyan]  [dim white]░░░░░░░░░[/dim white]
+[bold cyan]          |       \\___/  [/bold cyan]  [dim white]░░░░░░░░░░[/dim white]
+[bold cyan]          |       /   \\  [/bold cyan]  [dim white]░░░░░░░░░░[/dim white]
+[bold cyan]           \\     |  o  \\ [/bold cyan]  [dim white]░░░░░░░░░[/dim white]
+[bold cyan]            '-_   \\___/  [/bold cyan]  [dim white]░░░░░░[/dim white]
+[bold cyan]               '-_       [/bold cyan]  [dim white]░░░░[/dim white]
+[bold cyan]                  '---___[/bold cyan]  [dim white]░░[/dim white]""",
+        # Frame 4: organic bright, digital blocks solidify (medium blocks)
+        """[bold cyan]                 _---~~~~[/bold cyan]  [bright_green]▒▒▒▒▒▒▒-_[/bright_green]
+[bold cyan]              _-'  _.._  [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒'-_[/bright_green]
+[bold cyan]            _-'   /    \\ [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒'-_[/bright_green]
+[bold cyan]           /     |  o  / [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒▒\\[/bright_green]
+[bold cyan]          |       \\___/  [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒▒|[/bright_green]
+[bold cyan]          |       /   \\  [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒▒|[/bright_green]
+[bold cyan]           \\     |  o  \\ [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒/[/bright_green]
+[bold cyan]            '-_   \\___/  [/bold cyan]  [bright_green]▒▒▒▒▒▒_-[/bright_green]'
+[bold cyan]               '-_       [/bold cyan]  [bright_green]▒▒▒▒-[/bright_green]'
+[bold cyan]                  '---___[/bold cyan]  [bright_green]▒▒[/bright_green]'""",
+        # Frame 5: complete hybrid brain
+        """[bold cyan]                 _---~~~~[/bold cyan]  [bold green]███████-_[/bold green]
+[bold cyan]              _-'  _.._  [/bold cyan]  [bold green]████████'-_[/bold green]
+[bold cyan]            _-'   /    \\ [/bold cyan]  [bold green]█████████'-_[/bold green]
+[bold cyan]           /     |  o  / [/bold cyan]  [bold green]██████████\\[/bold green]
+[bold cyan]          |       \\___/  [/bold cyan]  [bold green]██████████|[/bold green]
+[bold cyan]          |       /   \\  [/bold cyan]  [bold green]██████████|[/bold green]
+[bold cyan]           \\     |  o  \\ [/bold cyan]  [bold green]█████████/[/bold green]
+[bold cyan]            '-_   \\___/  [/bold cyan]  [bold green]██████_-'[/bold green]
+[bold cyan]               '-_       [/bold cyan]  [bold green]████-'[/bold green]
+[bold cyan]                  '---___[/bold cyan]  [bold green]██'[/bold green]
+
+[bold magenta]               P  S  Y  C  H  E[/bold magenta]
+[dim cyan]          The AI-Powered Second Brain[/dim cyan]
+"""
+    ]
+    
+    with Live(auto_refresh=False, transient=False) as live:
+        for frame in frames:
+            live.update(Align.center(frame))
+            live.refresh()
+            time.sleep(0.18)
+        time.sleep(0.2)
+
 def main():
     parser = argparse.ArgumentParser(description="Query the local knowledge base or start a chat session.")
     parser.add_argument("query", nargs="?", help="The search query to answer. If omitted, and --chat is not set, prints database status.")
@@ -241,6 +319,7 @@ def main():
     )
     
     if args.chat:
+        show_brain_splash()
         console.print("\n[bold green]=== Chat Mode Activated ===[/bold green]")
         console.print("Ask any questions about your ingested books. Type [bold red]/help[/bold red] for options, or [bold red]/exit[/bold red] to end.\n")
         
