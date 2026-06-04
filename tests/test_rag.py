@@ -464,5 +464,55 @@ class TestRAGPureRetrieval(unittest.TestCase):
             query.main()
             mock_exit.assert_called_with(0)
 
+class TestMCPHostServer(unittest.TestCase):
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        db.init_db(self.db_path)
+        self.conn = db.get_connection(self.db_path)
+        
+    def tearDown(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    @mock.patch('sys.stdin')
+    @mock.patch('mcp_server.real_stdout')
+    def test_mcp_initialize_and_tools(self, mock_stdout, mock_stdin):
+        import json
+        import mcp_server
+        
+        # Setup mock stdin lines representing requests
+        mock_stdin.readline.side_effect = [
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n",
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n",
+            ""  # EOF to terminate loop
+        ]
+        
+        # Capture output written to stdout
+        written_data = []
+        def mock_write(data):
+            written_data.append(data)
+        mock_stdout.write.side_effect = mock_write
+        
+        # Run main loop
+        mcp_server.main()
+        
+        # Parse the JSON response objects
+        responses = [json.loads(line) for line in "".join(written_data).split("\n") if line.strip()]
+        
+        # Assertions
+        self.assertEqual(len(responses), 2)
+        
+        # Response 1: initialize
+        self.assertEqual(responses[0]["id"], 1)
+        self.assertEqual(responses[0]["result"]["serverInfo"]["name"], "local-knowledge-mcp")
+        
+        # Response 2: tools/list
+        self.assertEqual(responses[1]["id"], 2)
+        tools = responses[1]["result"]["tools"]
+        tool_names = [t["name"] for t in tools]
+        self.assertIn("search_knowledge", tool_names)
+        self.assertIn("retrieve_graph", tool_names)
+
 if __name__ == "__main__":
     unittest.main()
