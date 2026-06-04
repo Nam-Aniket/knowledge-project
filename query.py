@@ -90,8 +90,9 @@ def format_context(similar_chunks: list[tuple[dict, float]], top_n: int = 5) -> 
     """Formats retrieved chunks into a standard RAG context block."""
     context_blocks = []
     for idx, (record, score) in enumerate(similar_chunks[:top_n], 1):
+        loc_str = f" [{record['location']}]" if record.get('location') else ""
         block = (
-            f"Source [{idx}]: '{record['source_title']}' by {record['source_author']}\n"
+            f"Source [{idx}]: '{record['source_title']}' by {record['source_author']}{loc_str}\n"
             f"RRF Rank Score: {score:.4f}\n"
             f"Content:\n{record['text']}\n"
         )
@@ -160,7 +161,10 @@ def main():
     system_instruction = (
         "You are a helpful knowledge assistant. Synthesize a detailed, clear answer based on "
         "the retrieved context chunks below. You must ground your answers strictly in the "
-        "provided context. If the answer cannot be found in the context, be honest and state "
+        "provided context. In your answer, you MUST explicitly cite your sources and page numbers/chapters "
+        "whenever stating facts from them (e.g. [Title, Page X] or [Title, Chapter Y]). "
+        "The Source identifier and location information is provided at the start of each context block. "
+        "If the answer cannot be found in the context, be honest and state "
         "that you do not have enough information in the ingested documents to answer."
     )
     
@@ -256,7 +260,8 @@ def main():
                 # Show sources used (top unique items from the retrieved list)
                 sources_list = []
                 for r, score in similarities[:args.top]:
-                    sources_list.append(f"'{r['source_title']}' [dim](Score: {score:.3f})[/dim]")
+                    loc_suffix = f" [{r['location']}]" if r.get('location') else ""
+                    sources_list.append(f"'{r['source_title']}'{loc_suffix} [dim](Score: {score:.3f})[/dim]")
                 
                 if sources_list:
                     console.print(f"[dim]📚 Sources cited (RRF): {', '.join(sources_list)}[/dim]")
@@ -265,7 +270,8 @@ def main():
                 if show_detailed_sources:
                     console.print("\n[bold yellow]--- DETAILED CONTEXT USED ---[/bold yellow]")
                     for idx, (r, score) in enumerate(similarities[:args.top], 1):
-                        console.print(f"\n[bold magenta][{idx}] {r['source_title']} by {r['source_author']} (RRF: {score:.4f})[/bold magenta]")
+                        loc_suffix = f" [{r['location']}]" if r.get('location') else ""
+                        console.print(f"\n[bold magenta][{idx}] {r['source_title']} by {r['source_author']}{loc_suffix} (RRF: {score:.4f})[/bold magenta]")
                         console.print(f"{r['text'].strip()}")
                     console.print("[bold yellow]-----------------------------[/bold yellow]")
                     
@@ -300,7 +306,8 @@ def main():
             
             console.print("\n[bold]📚 Context Sources Cited (RRF):[/bold]")
             for r, score in similarities[:args.top]:
-                console.print(f" - [bold]{r['source_title']}[/bold] by {r['source_author']} [dim](RRF: {score:.4f})[/dim]")
+                loc_suffix = f" [{r['location']}]" if r.get('location') else ""
+                console.print(f" - [bold]{r['source_title']}[/bold] by {r['source_author']}{loc_suffix} [dim](RRF: {score:.4f})[/dim]")
             console.print("=" * 50 + "\n")
         except Exception as e:
             console.print(f"[bold red]Error generating answer:[/bold red] {e}")

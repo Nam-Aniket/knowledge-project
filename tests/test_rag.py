@@ -44,7 +44,7 @@ class TestRAGDatabase(unittest.TestCase):
         self.assertIsNone(non_existing)
 
         # Test adding chunk
-        chunk_id = db.add_chunk(self.conn, source_id, chunk_index=0, text="This is sample text.")
+        chunk_id = db.add_chunk(self.conn, source_id, chunk_index=0, text="This is sample text.", location="Page 12")
         self.assertEqual(chunk_id, 1)
 
         # Test adding embedding
@@ -56,6 +56,7 @@ class TestRAGDatabase(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["chunk_id"], 1)
         self.assertEqual(records[0]["text"], "This is sample text.")
+        self.assertEqual(records[0]["location"], "Page 12")
         self.assertEqual(records[0]["source_title"], "Test Book")
         self.assertEqual(records[0]["source_author"], "Test Author")
         np.testing.assert_array_almost_equal(records[0]["embedding"], np.array(embedding_vector, dtype=np.float32))
@@ -69,7 +70,7 @@ class TestRAGDatabase(unittest.TestCase):
             file_path="tests/dummy.txt", 
             checksum="unique_checksum_fts"
         )
-        chunk_id = db.add_chunk(self.conn, source_id, chunk_index=0, text="The quick brown fox jumps over the lazy dog.")
+        chunk_id = db.add_chunk(self.conn, source_id, chunk_index=0, text="The quick brown fox jumps over the lazy dog.", location="Chapter 1")
         db.add_embedding(self.conn, chunk_id, [0.1, 0.2])
         
         # 2. Search FTS5
@@ -77,6 +78,7 @@ class TestRAGDatabase(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["chunk_id"], chunk_id)
         self.assertEqual(results[0]["text"], "The quick brown fox jumps over the lazy dog.")
+        self.assertEqual(results[0]["location"], "Chapter 1")
         self.assertEqual(results[0]["source_title"], "Book A")
         
         # 3. Search with non-matching query
@@ -95,8 +97,10 @@ class TestRAGParsers(unittest.TestCase):
         os.unlink(self.txt_path)
 
     def test_txt_parser(self):
-        text = parsers.extract_text(self.txt_path)
-        self.assertEqual(text.strip(), "Hello World! This is a parser test.")
+        blocks = parsers.extract_text(self.txt_path)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0]["text"].strip(), "Hello World! This is a parser test.")
+        self.assertEqual(blocks[0]["location"], "Full Document")
 
     def test_unsupported_parser(self):
         # Create an existing file with unsupported extension

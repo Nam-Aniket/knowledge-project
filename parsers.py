@@ -16,6 +16,9 @@ class EpubTextParser(HTMLParser):
             'li', 'tr', 'blockquote', 'section', 'article', 
             'aside', 'header', 'footer', 'br', 'pre'
         }
+        self.headings = []
+        self.in_heading = False
+        self.heading_parts = []
         
     def handle_starttag(self, tag, attrs):
         if tag in self.ignore_tags:
@@ -28,6 +31,10 @@ class EpubTextParser(HTMLParser):
         if tag in self.block_tags:
             self.text_parts.append('\n')
             
+        if tag in {'h1', 'h2', 'h3', 'h4'}:
+            self.in_heading = True
+            self.heading_parts = []
+            
     def handle_endtag(self, tag):
         if tag in self.ignore_tags:
             self.ignore_depth = max(0, self.ignore_depth - 1)
@@ -39,11 +46,19 @@ class EpubTextParser(HTMLParser):
         if tag in self.block_tags:
             self.text_parts.append('\n')
             
+        if tag in {'h1', 'h2', 'h3', 'h4'}:
+            self.in_heading = False
+            heading_text = "".join(self.heading_parts).strip()
+            if heading_text:
+                self.headings.append(heading_text)
+            
     def handle_data(self, data):
         if self.ignore_depth > 0:
             return
         self.text_parts.append(data)
-        
+        if self.in_heading:
+            self.heading_parts.append(data)
+            
     def get_text(self):
         raw_text = "".join(self.text_parts)
         lines = []
@@ -61,9 +76,9 @@ class EpubTextParser(HTMLParser):
                     
         return "\n".join(cleaned_lines).strip()
 
-def extract_epub_text(file_path: str) -> str:
-    """Extracts plain text from an EPUB ZIP archive following spine manifest order."""
-    full_text = []
+def extract_epub_text(file_path: str) -> list[dict]:
+    """Extracts plain text grouped by chapters/sections from an EPUB ZIP archive following spine manifest order."""
+    blocks = []
     try:
         with zipfile.ZipFile(file_path, 'r') as epub:
             # 1. Locate the OPF root file using container.xml
@@ -152,39 +167,112 @@ def extract_epub_text(file_path: str) -> str:
                     parser.feed(content)
                     text = parser.get_text()
                     if text:
-                        full_text.append(text)
+                        # Extract location from heading or file name fallback
+                        location = None
+                        if parser.headings:
+                            location = parser.headings[0]
+                        if not location:
+                            base = posixpath.basename(f)
+                            name, _ = posixpath.splitext(base)
+                            location = name.replace("_", " ").replace("-", " ").title()
+                        blocks.append({
+                            "text": text,
+                            "location": location
+                        })
                 except Exception:
                     pass
                     
     except Exception as zip_err:
         raise ValueError(f"Failed to read EPUB file: {zip_err}")
         
-    return "\n\n".join(full_text)
+    return blocks
 
-def extract_pdf_text(file_path: str) -> str:
-    """Extracts plain text from a PDF file using pypdf."""
-    text_content = []
+def extract_pdf_text(file_path: str) -> list[dict]:
+    """Extracts plain text grouped by page numbers from a PDF file using pypdf."""
+    pages_data = []
     try:
         reader = PdfReader(file_path)
-        for page in reader.pages:
+        for i, page in enumerate(reader.pages):
             text = page.extract_text()
-            if text:
-                text_content.append(text)
+            if text and text.strip():
+                pages_data.append({
+                    "text": text,
+                    "location": f"Page {i + 1}"
+                })
     except Exception as e:
         raise ValueError(f"Failed to read PDF file: {e}")
         
-    return "\n\n".join(text_content)
+    return pages_data
 
-def extract_txt_text(file_path: str) -> str:
-    """Extracts plain text from a text or markdown file."""
+def extract_txt_text(file_path: str) -> list[dict]:
+    """Extracts plain text from a text or markdown file, splitting by headers if possible."""
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
+            content = f.read()
     except Exception as e:
         raise ValueError(f"Failed to read text file: {e}")
+        
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in [".md", ".markdown"]:
+        lines = content.split('\n')
+        blocks = []
+        current_header = "Intro"
+        current_lines = []
+        
+        for line in lines:
+            if line.startswith(('# ', '## ', '### ')):
+                if current_lines:
+                    blocks.append({
+                        "text": "\n".join(current_lines).strip(),
+                        "location": current_header
+                    })
+                    current_lines = []
+                current_header = line.lstrip('#').strip()
+            current_lines.append(line)
+            
+        if current_lines:
+            blocks.append({
+                "text": "\n".join(current_lines).strip(),
+                "location": current_header
+            })
+            
+        blocks = [b for b in blocks if b["text"].strip()]
+        if not blocks:
+            blocks = [{"text": content, "location": "Full Document"}]
+        return blocks
+    else:
+        import re
+        lines = content.split('\n')
+        blocks = []
+        current_header = "Full Document"
+        current_lines = []
+        
+        chapter_pattern = re.compile(r'^\s*(chapter|section|part|book)\s+\w+', re.IGNORECASE)
+        
+        for line in lines:
+            if chapter_pattern.match(line):
+                if current_lines:
+                    blocks.append({
+                        "text": "\n".join(current_lines).strip(),
+                        "location": current_header
+                    })
+                    current_lines = []
+                current_header = line.strip()
+            current_lines.append(line)
+            
+        if current_lines:
+            blocks.append({
+                "text": "\n".join(current_lines).strip(),
+                "location": current_header
+            })
+            
+        blocks = [b for b in blocks if b["text"].strip()]
+        if not blocks:
+            blocks = [{"text": content, "location": "Full Document"}]
+        return blocks
 
-def extract_text(file_path: str) -> str:
-    """Extracts text from a file based on its extension."""
+def extract_text(file_path: str) -> list[dict]:
+    """Extracts text chunks and their locations from a file based on its extension."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
         
