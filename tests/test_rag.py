@@ -514,5 +514,49 @@ class TestMCPHostServer(unittest.TestCase):
         self.assertIn("search_knowledge", tool_names)
         self.assertIn("retrieve_graph", tool_names)
 
+class TestDatabaseMigration(unittest.TestCase):
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        db.init_db(self.db_path)
+        self.conn = db.get_connection(self.db_path)
+
+    def tearDown(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def test_metadata_get_set(self):
+        db.set_metadata(self.conn, "test_key", "test_val")
+        val = db.get_metadata(self.conn, "test_key")
+        self.assertEqual(val, "test_val")
+
+    @mock.patch('rich.console.Console')
+    @mock.patch('rich.progress.Progress')
+    def test_automatic_migration_on_mismatch(self, mock_progress, mock_console):
+        # 1. Ingest a mock chunk with embedding of dim 5
+        source_id = db.add_source(self.conn, "Test Title", "Test Author", "dummy.txt", "checksum_dummy")
+        chunk_id = db.add_chunk(self.conn, source_id, 0, "Hello stoichiometry virtue Stoicism.")
+        db.add_embedding(self.conn, chunk_id, [1.0, 2.0, 3.0, 4.0, 5.0])
+        
+        # Manually set metadata to "old_model"
+        db.set_metadata(self.conn, "embed_model", "old_model")
+        
+        # 2. Mock LLMClient to return new model "new_model" and embeddings of dim 3
+        mock_llm = mock.Mock()
+        mock_llm.embed_model = "new_model"
+        mock_llm.get_embeddings_batch.return_value = [[10.0, 20.0, 30.0]]
+        
+        # 3. Trigger check_and_migrate_embeddings
+        db.check_and_migrate_embeddings(self.db_path, mock_llm)
+        
+        # 4. Verify metadata updated
+        meta = db.get_metadata(self.conn, "embed_model")
+        self.assertEqual(meta, "new_model")
+        
+        # 5. Verify embeddings are updated to the mocked values of dim 3
+        records = db.get_all_embeddings_with_chunks(self.conn)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(list(records[0]["embedding"]), [10.0, 20.0, 30.0])
+
 if __name__ == "__main__":
     unittest.main()

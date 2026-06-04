@@ -12,7 +12,7 @@ from rich.table import Table
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import init_db, get_connection, check_checksum, add_source, add_chunk, add_embedding, resolve_db_path
+from db import init_db, get_connection, check_checksum, add_source, add_chunk, add_embedding, resolve_db_path, check_and_migrate_embeddings
 from parsers import extract_text
 from llm_client import LLMClient
 
@@ -120,8 +120,6 @@ def main():
         err_console.print(f"[bold yellow]Warning:[/bold yellow] No supported files found in provided paths.")
         sys.exit(0)
         
-    conn = get_connection(db_path)
-    
     success_count = 0
     skipped_count = 0
     failed_count = 0
@@ -131,8 +129,12 @@ def main():
         llm_client = LLMClient()
     except Exception as e:
         err_console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
-        conn.close()
         sys.exit(1)
+
+    # Check and run database embedding migrations if LLM config changed
+    check_and_migrate_embeddings(db_path, llm_client)
+    
+    conn = get_connection(db_path)
         
     for path in files_to_ingest:
         try:

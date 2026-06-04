@@ -11,7 +11,7 @@ sys.stdout = sys.stderr
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, resolve_db_path
+from db import get_connection, get_all_embeddings_with_chunks, resolve_db_path, check_and_migrate_embeddings
 from query import perform_hybrid_search, format_context, retrieve_concept_context
 from llm_client import LLMClient
 
@@ -31,10 +31,12 @@ def search_knowledge_tool(query_text, topic=None, top=5):
     try:
         # Initialize LLM Client
         llm = LLMClient()
+        check_and_migrate_embeddings(db_path, llm)
     except Exception as e:
-        log(f"Failed to initialize LLM: {e}. Falling back to offline mode.")
+        log(f"Failed to initialize LLM or migrate database: {e}. Falling back to offline mode.")
         class FakeLLM:
             provider = "none"
+            embed_model = "none"
         llm = FakeLLM()
         
     conn = get_connection(db_path)

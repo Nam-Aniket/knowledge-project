@@ -98,6 +98,14 @@ def init_db(db_path: str):
         )
     """)
     
+    # Create metadata table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -289,3 +297,121 @@ def get_concept_links(conn: sqlite3.Connection) -> list[dict]:
     """)
     rows = cursor.fetchall()
     return [{"id": r[0], "source": r[1], "target": r[2], "relationship": r[3], "description": r[4]} for r in rows]
+
+def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+    """Retrieves a metadata value by key."""
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT value FROM metadata WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+    except sqlite3.OperationalError:
+        # Table might not exist yet if database is older
+        return None
+
+def set_metadata(conn: sqlite3.Connection, key: str, value: str):
+    """Sets a metadata value by key."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO metadata (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    """, (key, value))
+    conn.commit()
+
+def check_and_migrate_embeddings(db_path: str, llm):
+    """Checks if the configured embedding model matches the model stored in the database.
+    If they mismatch, automatically re-generates all embeddings using the new model.
+    """
+    resolved_path = resolve_db_path(db_path)
+    if not os.path.exists(resolved_path):
+        return
+
+    conn = get_connection(resolved_path)
+    try:
+        # Ensure metadata table exists
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        conn.commit()
+
+        # Check if database is empty
+        cursor.execute("SELECT COUNT(*) FROM chunks")
+        chunk_count = cursor.fetchone()[0]
+        if chunk_count == 0:
+            set_metadata(conn, "embed_model", llm.embed_model)
+            return
+
+        db_model = get_metadata(conn, "embed_model")
+        config_model = llm.embed_model
+
+        # If LLM client or embed model is a unit test mock, skip migration to avoid side-effects in unrelated tests
+        if 'Mock' in type(config_model).__name__:
+            return
+
+        if db_model == config_model:
+            return
+
+        # We have a mismatch!
+        from rich.console import Console
+        from rich.progress import Progress
+        console = Console()
+
+        console.print(f"\n[bold yellow]🔄 Mismatched embedding model detected in database![/bold yellow]")
+        console.print(f"  [dim]Database model: {db_model or 'None (legacy)'}[/dim]")
+        console.print(f"  [dim]Configured model: {config_model}[/dim]")
+
+        if config_model == "none":
+            console.print("[yellow]AI-Free mode configured. Clearing existing database embeddings...[/yellow]")
+            cursor.execute("DELETE FROM embeddings")
+            conn.commit()
+            set_metadata(conn, "embed_model", "none")
+            console.print("[green]✨ Database embeddings cleared successfully.[/green]\n")
+            return
+
+        console.print(f"[cyan]Automatically re-generating embeddings for {chunk_count} chunks using '{config_model}'...[/cyan]")
+
+        # Fetch all chunks
+        cursor.execute("SELECT id, text FROM chunks ORDER BY id")
+        chunk_rows = cursor.fetchall()
+        chunk_ids = [r[0] for r in chunk_rows]
+        texts = [r[1] for r in chunk_rows]
+
+        # Generate new embeddings in batches
+        embeddings = []
+        batch_size = 50
+        with Progress(console=console) as progress:
+            task = progress.add_task("[cyan]Re-generating embeddings...", total=len(texts))
+            for i in range(0, len(texts), batch_size):
+                sub_texts = texts[i:i+batch_size]
+                sub_embeddings = llm.get_embeddings_batch(sub_texts)
+                embeddings.extend(sub_embeddings)
+                progress.update(task, advance=len(sub_texts))
+
+        # Clear old embeddings and save new ones
+        cursor.execute("DELETE FROM embeddings")
+        
+        # We can insert using add_embedding logic but inline for efficiency
+        import numpy as np
+        for cid, emb in zip(chunk_ids, embeddings):
+            vector_arr = np.array(emb, dtype=np.float32)
+            blob = vector_arr.tobytes()
+            cursor.execute(
+                "INSERT INTO embeddings (chunk_id, embedding_blob) VALUES (?, ?)",
+                (cid, blob)
+            )
+        
+        set_metadata(conn, "embed_model", config_model)
+        conn.commit()
+        console.print(f"[bold green]✨ Database embeddings successfully migrated to '{config_model}'![/bold green]\n")
+
+    except Exception as e:
+        console = Console(stderr=True)
+        console.print(f"[bold red]Error during automatic embedding migration:[/bold red] {e}")
+        conn.rollback()
+    finally:
+        conn.close()

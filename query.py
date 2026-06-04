@@ -15,7 +15,7 @@ from prompt_toolkit.completion import WordCompleter
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, search_fts, resolve_db_path
+from db import get_connection, get_all_embeddings_with_chunks, search_fts, resolve_db_path, check_and_migrate_embeddings
 from llm_client import LLMClient
 
 # Initialize rich console
@@ -282,6 +282,9 @@ def main():
     except Exception as e:
         err_console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
         sys.exit(1)
+        
+    # Check and run database embedding migrations if LLM config changed
+    check_and_migrate_embeddings(db_path, llm)
         
     # Fetch all records
     conn = get_connection(db_path)
