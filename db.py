@@ -32,9 +32,16 @@ def init_db(db_path: str):
             source_id INTEGER NOT NULL,
             chunk_index INTEGER NOT NULL,
             text TEXT NOT NULL,
+            location TEXT,
             FOREIGN KEY (source_id) REFERENCES sources (id) ON DELETE CASCADE
         )
     """)
+    
+    # Migration helper: Add location column to chunks if database exists but lacks it
+    try:
+        cursor.execute("ALTER TABLE chunks ADD COLUMN location TEXT")
+    except sqlite3.OperationalError:
+        pass
     
     # Create embeddings table
     cursor.execute("""
@@ -83,12 +90,12 @@ def add_source(conn: sqlite3.Connection, title: str, author: str | None, file_pa
     conn.commit()
     return cursor.lastrowid
 
-def add_chunk(conn: sqlite3.Connection, source_id: int, chunk_index: int, text: str) -> int:
-    """Adds a chunk of text to the database and indexes it in FTS5. Returns the chunk ID."""
+def add_chunk(conn: sqlite3.Connection, source_id: int, chunk_index: int, text: str, location: str | None = None) -> int:
+    """Adds a chunk of text to the database with location metadata and indexes it in FTS5. Returns the chunk ID."""
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO chunks (source_id, chunk_index, text) VALUES (?, ?, ?)",
-        (source_id, chunk_index, text)
+        "INSERT INTO chunks (source_id, chunk_index, text, location) VALUES (?, ?, ?, ?)",
+        (source_id, chunk_index, text, location)
     )
     chunk_id = cursor.lastrowid
     cursor.execute(
@@ -111,12 +118,13 @@ def add_embedding(conn: sqlite3.Connection, chunk_id: int, embedding: list[float
     conn.commit()
 
 def get_all_embeddings_with_chunks(conn: sqlite3.Connection) -> list[dict]:
-    """Retrieves all chunk texts and deserializes their corresponding embeddings."""
+    """Retrieves all chunk texts, locations, and deserializes their corresponding embeddings."""
     cursor = conn.cursor()
     cursor.execute("""
         SELECT 
             c.id, 
             c.text, 
+            c.location,
             s.title, 
             s.author, 
             e.embedding_blob 
@@ -127,11 +135,12 @@ def get_all_embeddings_with_chunks(conn: sqlite3.Connection) -> list[dict]:
     rows = cursor.fetchall()
     
     results = []
-    for chunk_id, text, source_title, source_author, blob in rows:
+    for chunk_id, text, location, source_title, source_author, blob in rows:
         embedding = np.frombuffer(blob, dtype=np.float32)
         results.append({
             "chunk_id": chunk_id,
             "text": text,
+            "location": location,
             "source_title": source_title,
             "source_author": source_author,
             "embedding": embedding
@@ -147,6 +156,7 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
             SELECT 
                 c.id, 
                 c.text, 
+                c.location,
                 s.title, 
                 s.author,
                 e.embedding_blob
@@ -164,6 +174,7 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
             SELECT 
                 c.id, 
                 c.text, 
+                c.location,
                 s.title, 
                 s.author,
                 e.embedding_blob
@@ -176,11 +187,12 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
         rows = cursor.fetchall()
         
     results = []
-    for chunk_id, text, source_title, source_author, blob in rows:
+    for chunk_id, text, location, source_title, source_author, blob in rows:
         embedding = np.frombuffer(blob, dtype=np.float32)
         results.append({
             "chunk_id": chunk_id,
             "text": text,
+            "location": location,
             "source_title": source_title,
             "source_author": source_author,
             "embedding": embedding

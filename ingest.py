@@ -100,16 +100,26 @@ def main():
         console.print(f"[dim]SHA-256 Checksum: {checksum}[/dim]")
         
         # 4. Extract Text
-        with console.status("[bold cyan]Extracting plain text from document...") as status:
-            full_text = extract_text(file_path)
+        with console.status("[bold cyan]Extracting text and locations from document...") as status:
+            extracted_blocks = extract_text(file_path)
             
-        if not full_text.strip():
+        if not extracted_blocks:
             console.print("[bold red]Error:[/bold red] No text could be extracted from the file.", file=sys.stderr)
             sys.exit(1)
             
         # 5. Chunk Text
-        with console.status("[bold cyan]Splitting text into overlapping chunks...") as status:
-            chunks = chunk_text(full_text, chunk_size=args.chunk_size, overlap=args.overlap)
+        chunks = [] # List of dict: {"text": str, "location": str | None}
+        with console.status("[bold cyan]Splitting text into overlapping chunks by location...") as status:
+            for block in extracted_blocks:
+                block_text = block["text"]
+                block_loc = block["location"]
+                
+                block_chunks = chunk_text(block_text, chunk_size=args.chunk_size, overlap=args.overlap)
+                for c in block_chunks:
+                    chunks.append({
+                        "text": c,
+                        "location": block_loc
+                    })
             
         console.print(f"📄 Document split into [bold cyan]{len(chunks)}[/bold cyan] text chunks.")
         
@@ -133,8 +143,9 @@ def main():
             task = progress.add_task("[cyan]Requesting API embeddings...", total=len(chunks))
             for i in range(0, len(chunks), batch_size):
                 sub_batch = chunks[i:i+batch_size]
+                sub_texts = [c["text"] for c in sub_batch]
                 try:
-                    sub_embeddings = llm_client.get_embeddings_batch(sub_batch)
+                    sub_embeddings = llm_client.get_embeddings_batch(sub_texts)
                     embeddings.extend(sub_embeddings)
                     progress.update(task, advance=len(sub_batch))
                 except Exception as api_err:
@@ -150,8 +161,8 @@ def main():
         
         with Progress(console=console) as progress:
             task = progress.add_task("[green]Storing chunks in SQLite...", total=len(chunks))
-            for idx, (text_val, embedding) in enumerate(zip(chunks, embeddings)):
-                chunk_id = add_chunk(conn, source_id, idx, text_val)
+            for idx, (chunk_data, embedding) in enumerate(zip(chunks, embeddings)):
+                chunk_id = add_chunk(conn, source_id, idx, chunk_data["text"], location=chunk_data["location"])
                 add_embedding(conn, chunk_id, embedding)
                 progress.update(task, advance=1)
                 
