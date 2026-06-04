@@ -514,6 +514,52 @@ class TestMCPHostServer(unittest.TestCase):
         self.assertIn("search_knowledge", tool_names)
         self.assertIn("retrieve_graph", tool_names)
 
+    @mock.patch('sys.stdin')
+    @mock.patch('mcp_server.real_stdout')
+    def test_mcp_prompts(self, mock_stdout, mock_stdin):
+        import json
+        import mcp_server
+        
+        # Setup mock stdin lines representing requests
+        mock_stdin.readline.side_effect = [
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "prompts/list"}) + "\n",
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "prompts/get", "params": {"name": "psyche", "arguments": {}}}) + "\n",
+            json.dumps({"jsonrpc": "2.0", "id": 3, "method": "prompts/get", "params": {"name": "psyche", "arguments": {"query": "Stoic focus"}}}) + "\n",
+            ""  # EOF to terminate loop
+        ]
+        
+        # Capture output written to stdout
+        written_data = []
+        def mock_write(data):
+            written_data.append(data)
+        mock_stdout.write.side_effect = mock_write
+        
+        with mock.patch.dict(os.environ, {"DATABASE_PATH": self.db_path}):
+            # Run main loop
+            mcp_server.main()
+        
+        # Parse the JSON response objects
+        responses = [json.loads(line) for line in "".join(written_data).split("\n") if line.strip()]
+        
+        self.assertEqual(len(responses), 3)
+        
+        # Response 1: prompts/list
+        self.assertEqual(responses[0]["id"], 1)
+        prompts = responses[0]["result"]["prompts"]
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0]["name"], "psyche")
+        self.assertFalse(prompts[0]["arguments"][0]["required"]) # query is optional now
+        
+        # Response 2: prompts/get without query (fallback)
+        self.assertEqual(responses[1]["id"], 2)
+        self.assertIn("messages", responses[1]["result"])
+        self.assertIn("Ask a question or search for concepts", responses[1]["result"]["messages"][0]["content"]["text"])
+        
+        # Response 3: prompts/get with query
+        self.assertEqual(responses[2]["id"], 3)
+        self.assertIn("messages", responses[2]["result"])
+        self.assertIn("Use the following retrieved notes and passages", responses[2]["result"]["messages"][0]["content"]["text"])
+
 class TestDatabaseMigration(unittest.TestCase):
     def setUp(self):
         self.db_fd, self.db_path = tempfile.mkstemp()

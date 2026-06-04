@@ -64,7 +64,7 @@ try {
 description: Query the Psyche database for your books and notes
 argument-hint: [query]
 ---
-Please search your knowledge base for "$ARGUMENTS" using the \`psyche\` MCP server's \`search_knowledge\` tool, and summarize the relevant passages and concepts to answer the question.
+Search the psyche database for: "$ARGUMENTS"
 `;
   fs.writeFileSync(path.join(codexPromptsDir, 'psyche.md'), promptContent, 'utf8');
   console.log('✅ Registered Codex slash command prompt.');
@@ -78,7 +78,7 @@ Please search your knowledge base for "$ARGUMENTS" using the \`psyche\` MCP serv
   
   const geminiTomlContent = `description = "Query the Psyche database for your books and notes"
 prompt = """
-Please search your knowledge base for "$ARGUMENTS" using the \`psyche\` MCP server's \`search_knowledge\` tool, and summarize the relevant passages and concepts to answer the question.
+Search the psyche database for: "$ARGUMENTS"
 """
 `;
   fs.writeFileSync(path.join(geminiCommandsDir, 'psyche.toml'), geminiTomlContent, 'utf8');
