@@ -23,7 +23,7 @@ def check_and_run_setup():
         provider = os.getenv("LLM_PROVIDER")
         if provider in ["gemini", "openai"] and os.getenv(f"{provider.upper()}_API_KEY"):
             return
-        elif provider in ["ollama", "none"]:
+        elif provider in ["ollama", "none", "local"]:
             return
             
     run_setup_wizard(env_path)
