@@ -11,7 +11,7 @@ from rich.table import Table
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, add_concept, add_concept_link
+from db import get_connection, get_all_embeddings_with_chunks, add_concept, add_concept_link, resolve_db_path
 from llm_client import LLMClient
 
 console = Console()
@@ -333,7 +333,7 @@ def main():
     parser.add_argument("--db-path", help="Database file path override. Default is read from .env (DATABASE_PATH).")
     
     args = parser.parse_args()
-    db_path = args.db_path or os.getenv("DATABASE_PATH", "data/knowledge.db")
+    db_path = resolve_db_path(args.db_path or os.getenv("DATABASE_PATH", "knowledge.db"))
     
     if not os.path.exists(db_path):
         err_console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' not found. Please ingest some files first.")

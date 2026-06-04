@@ -416,7 +416,7 @@ class TestCLIAndRouting(unittest.TestCase):
         cli.main()
         
         # Verify environment variable was set
-        self.assertEqual(os.environ.get("DATABASE_PATH"), os.path.join("data", "topic_custom_topic.db"))
+        self.assertEqual(os.environ.get("DATABASE_PATH"), db.resolve_db_path("topic_custom_topic.db"))
         # Verify --topic and its value were removed, and subcommand "ingest" was popped
         self.assertEqual(sys.argv, ["psyche", "path/to/notes"])
         mock_ingest.assert_called_once()
@@ -428,7 +428,7 @@ class TestCLIAndRouting(unittest.TestCase):
         cli.main()
         
         # Verify environment variable was set
-        self.assertEqual(os.environ.get("DATABASE_PATH"), os.path.join("data", "topic_philosophy.db"))
+        self.assertEqual(os.environ.get("DATABASE_PATH"), db.resolve_db_path("topic_philosophy.db"))
         self.assertEqual(sys.argv, ["psyche", "What is Stoicism?"])
         mock_query.assert_called_once()
 

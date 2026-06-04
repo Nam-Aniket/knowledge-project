@@ -15,7 +15,7 @@ from prompt_toolkit.completion import WordCompleter
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, search_fts
+from db import get_connection, get_all_embeddings_with_chunks, search_fts, resolve_db_path
 from llm_client import LLMClient
 
 # Initialize rich console
@@ -271,7 +271,7 @@ def main():
     
     args = parser.parse_args()
     
-    db_path = args.db_path or os.getenv("DATABASE_PATH", "data/knowledge.db")
+    db_path = resolve_db_path(args.db_path or os.getenv("DATABASE_PATH", "knowledge.db"))
     if not os.path.exists(db_path):
         err_console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' not found. Please ingest some files first.")
         sys.exit(1)

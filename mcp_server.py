@@ -11,7 +11,7 @@ sys.stdout = sys.stderr
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks
+from db import get_connection, get_all_embeddings_with_chunks, resolve_db_path
 from query import perform_hybrid_search, format_context, retrieve_concept_context
 from llm_client import LLMClient
 
@@ -21,9 +21,9 @@ def log(msg):
 
 def search_knowledge_tool(query_text, topic=None, top=5):
     # Resolve db path
-    db_path = os.getenv("DATABASE_PATH", "data/knowledge.db")
+    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
     if topic:
-        db_path = os.path.join("data", f"topic_{topic}.db")
+        db_path = resolve_db_path(f"topic_{topic}.db")
         
     if not os.path.exists(db_path):
         return f"Error: Database for topic '{topic or 'default'}' not found at '{db_path}'."
@@ -63,9 +63,9 @@ def search_knowledge_tool(query_text, topic=None, top=5):
     return result
 
 def retrieve_graph_tool(topic=None):
-    db_path = os.getenv("DATABASE_PATH", "data/knowledge.db")
+    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
     if topic:
-        db_path = os.path.join("data", f"topic_{topic}.db")
+        db_path = resolve_db_path(f"topic_{topic}.db")
         
     if not os.path.exists(db_path):
         return f"Error: Database for topic '{topic or 'default'}' not found."

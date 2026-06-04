@@ -24,8 +24,9 @@ def main():
         sys.argv.pop(idx)
         
     if topic_name:
-        # Standardize topic database location in the 'data' directory
-        os.environ["DATABASE_PATH"] = os.path.join("data", f"topic_{topic_name}.db")
+        from db import resolve_db_path
+        # Standardize topic database location via resolve_db_path helper
+        os.environ["DATABASE_PATH"] = resolve_db_path(f"topic_{topic_name}.db")
 
     if len(sys.argv) < 2:
         print("Usage: psyche [setup | ingest | query | chat | build-graph | start-mcp] [options]")
