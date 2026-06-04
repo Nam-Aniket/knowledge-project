@@ -153,7 +153,8 @@ def main():
                 resp["result"] = {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "tools": {}
+                        "tools": {},
+                        "prompts": {}
                     },
                     "serverInfo": {
                         "name": "psyche-mcp",
@@ -163,6 +164,68 @@ def main():
             elif method == "notifications/initialized":
                 # Notifications don't get a response
                 continue
+            elif method == "prompts/list":
+                resp["result"] = {
+                    "prompts": [
+                        {
+                            "name": "psyche",
+                            "description": "Ask a question or search for concepts across your Obsidian notes and books database.",
+                            "arguments": [
+                                {
+                                    "name": "query",
+                                    "description": "The search query or question to ask the database (e.g. 'writing tips')",
+                                    "required": True
+                                },
+                                {
+                                    "name": "topic",
+                                    "description": "Optional topic database name (e.g. topic_<topic>.db)",
+                                    "required": False
+                                },
+                                {
+                                    "name": "top",
+                                    "description": "Optional number of results to retrieve (default is 5)",
+                                    "required": False
+                                }
+                            ]
+                        }
+                    ]
+                }
+            elif method == "prompts/get":
+                params = req.get("params", {})
+                name = params.get("name")
+                arguments = params.get("arguments", {})
+                
+                if name == "psyche":
+                    query = arguments.get("query")
+                    topic = arguments.get("topic")
+                    top_val = arguments.get("top", 5)
+                    try:
+                        top = int(top_val)
+                    except Exception:
+                        top = 5
+                        
+                    if not query:
+                        raise ValueError("The 'query' argument is required.")
+                        
+                    text_result = search_knowledge_tool(query, topic, top)
+                    
+                    resp["result"] = {
+                        "description": f"Retrieved knowledge from database for: '{query}'",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": {
+                                    "type": "text",
+                                    "text": f"Use the following retrieved notes and passages to address the query: '{query}'\n\n{text_result}"
+                                }
+                            }
+                        ]
+                    }
+                else:
+                    resp["error"] = {
+                        "code": -32601,
+                        "message": f"Prompt '{name}' not found."
+                    }
             elif method == "tools/list":
                 resp["result"] = {
                     "tools": [
