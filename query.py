@@ -20,6 +20,7 @@ from llm_client import LLMClient
 
 # Initialize rich console
 console = Console()
+err_console = Console(stderr=True)
 
 # Load environment variables
 load_dotenv()
@@ -181,14 +182,14 @@ def main():
     
     db_path = args.db_path or os.getenv("DATABASE_PATH", "data/knowledge.db")
     if not os.path.exists(db_path):
-        console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' not found. Please ingest some files first.", file=sys.stderr)
+        err_console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' not found. Please ingest some files first.")
         sys.exit(1)
         
     # Initialize LLM client
     try:
         llm = LLMClient()
     except Exception as e:
-        console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}", file=sys.stderr)
+        err_console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
         sys.exit(1)
         
     # Fetch all records
