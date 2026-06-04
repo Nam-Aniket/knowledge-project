@@ -176,5 +176,61 @@ class TestRAGHybridSearch(unittest.TestCase):
         self.assertAlmostEqual(combined[1][1], 1/63 + 1/61, places=6)
         self.assertAlmostEqual(combined[2][1], 1/62, places=6)
 
+class TestRAGDirectorySync(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        
+        # Create test files with different extensions
+        self.file_txt = os.path.join(self.temp_dir.name, "book1.txt")
+        self.file_epub = os.path.join(self.temp_dir.name, "book2.epub")
+        self.file_pdf = os.path.join(self.temp_dir.name, "book3.pdf")
+        self.file_invalid = os.path.join(self.temp_dir.name, "other.log")
+        
+        # Subdirectory scanning test
+        self.sub_dir = os.path.join(self.temp_dir.name, "subdir")
+        os.makedirs(self.sub_dir, exist_ok=True)
+        self.file_sub_txt = os.path.join(self.sub_dir, "nested.txt")
+        
+        for fpath in [self.file_txt, self.file_epub, self.file_pdf, self.file_invalid, self.file_sub_txt]:
+            with open(fpath, "w") as f:
+                f.write("test content")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_directory_scan_default_extensions(self):
+        # Default behavior scans: .pdf, .epub, .txt, .md, .markdown
+        allowed_exts = {".pdf", ".epub", ".txt", ".md", ".markdown"}
+        scanned_files = []
+        for root, dirs, files in os.walk(self.temp_dir.name):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in allowed_exts:
+                    scanned_files.append(os.path.basename(file))
+                    
+        self.assertIn("book1.txt", scanned_files)
+        self.assertIn("book2.epub", scanned_files)
+        self.assertIn("book3.pdf", scanned_files)
+        self.assertIn("nested.txt", scanned_files)
+        self.assertNotIn("other.log", scanned_files)
+        self.assertEqual(len(scanned_files), 4)
+
+    def test_directory_scan_filtered_extensions(self):
+        # Filter by custom extensions (e.g. text/epub only)
+        allowed_exts = {".txt", ".epub"}
+        scanned_files = []
+        for root, dirs, files in os.walk(self.temp_dir.name):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in allowed_exts:
+                    scanned_files.append(os.path.basename(file))
+                    
+        self.assertIn("book1.txt", scanned_files)
+        self.assertIn("book2.epub", scanned_files)
+        self.assertIn("nested.txt", scanned_files)
+        self.assertNotIn("book3.pdf", scanned_files)
+        self.assertNotIn("other.log", scanned_files)
+        self.assertEqual(len(scanned_files), 3)
+
 if __name__ == "__main__":
     unittest.main()
