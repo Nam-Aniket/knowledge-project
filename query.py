@@ -8,6 +8,9 @@ from rich.console import Console
 from rich.table import Table
 from rich.markdown import Markdown
 from rich.status import Status
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.completion import WordCompleter
 
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -122,27 +125,73 @@ def main():
     
     if args.chat:
         console.print("\n[bold green]=== Chat Mode Activated ===[/bold green]")
-        console.print("Ask any questions about your ingested books. Type [bold red]'exit'[/bold red] or [bold red]'quit'[/bold red] to end.\n")
+        console.print("Ask any questions about your ingested books. Type [bold red]/help[/bold red] for options, or [bold red]/exit[/bold red] to end.\n")
+        
+        # Set up prompt session with command history file and completion hints
+        history_dir = os.path.dirname(os.path.abspath(db_path))
+        os.makedirs(history_dir, exist_ok=True)
+        history_file = os.path.join(history_dir, ".chat_history")
+        
+        commands_completer = WordCompleter([
+            '/help', '/exit', '/quit', '/sources', '/status'
+        ], ignore_case=True)
+        
+        session = PromptSession(
+            history=FileHistory(history_file),
+            completer=commands_completer,
+            complete_while_typing=True
+        )
+        
+        show_detailed_sources = False
         chat_history = []
         
         while True:
             try:
-                user_input = console.input("[bold blue]You[/bold blue] > ")
+                # Use prompt_toolkit instead of simple input
+                user_input = session.prompt("You > ")
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[bold yellow]Goodbye![/bold yellow]")
                 break
                 
-            if user_input.strip().lower() in ["exit", "quit"]:
-                console.print("[bold yellow]Goodbye![/bold yellow]")
-                break
-                
-            if not user_input.strip():
+            clean_input = user_input.strip()
+            if not clean_input:
                 continue
+                
+            # Process slash commands
+            if clean_input.startswith('/'):
+                cmd = clean_input.lower()
+                if cmd in ['/exit', '/quit']:
+                    console.print("[bold yellow]Goodbye![/bold yellow]")
+                    break
+                elif cmd == '/help':
+                    console.print("\n[bold green]💡 Available Chat Commands:[/bold green]")
+                    console.print("  [bold]/help[/bold]    - Show this help menu")
+                    console.print("  [bold]/exit[/bold]    - Close the chat session")
+                    console.print("  [bold]/quit[/bold]    - Close the chat session")
+                    console.print("  [bold]/sources[/bold] - Toggle showing full matching book sections in the output")
+                    console.print("  [bold]/status[/bold]  - Show active model configurations and database details\n")
+                    continue
+                elif cmd == '/sources':
+                    show_detailed_sources = not show_detailed_sources
+                    state_str = "ENABLED" if show_detailed_sources else "DISABLED"
+                    console.print(f"[bold cyan]Detailed context sources display is now {state_str}.[/bold cyan]\n")
+                    continue
+                elif cmd == '/status':
+                    console.print("\n[bold green]🛠️ System Status[/bold green]")
+                    console.print(f"  [bold]Database:[/bold] {db_path}")
+                    console.print(f"  [bold]Provider:[/bold] {llm.provider.upper()}")
+                    console.print(f"  [bold]Embedding Model:[/bold] {llm.embed_model}")
+                    console.print(f"  [bold]Chat Model:[/bold] {llm.chat_model}")
+                    console.print(f"  [bold]Chunks Loaded:[/bold] {len(records)}\n")
+                    continue
+                else:
+                    console.print(f"[bold red]Unknown command:[/bold red] {clean_input}. Type [bold]/help[/bold] for instructions.\n")
+                    continue
                 
             # Perform RAG
             try:
                 with console.status("[bold cyan]Retrieving context and thinking...") as status:
-                    q_vector = llm.get_embedding(user_input)
+                    q_vector = llm.get_embedding(clean_input)
                     similarities = calculate_similarities(q_vector, records)
                     context_str = format_context(similarities, top_n=args.top)
                     
@@ -154,7 +203,7 @@ def main():
                     prompt = (
                         f"### RETRIEVED CONTEXT FROM BOOKS:\n{context_str}\n\n"
                         f"### CONVERSATION HISTORY:\n{history_str}"
-                        f"User: {user_input}\n"
+                        f"User: {clean_input}\n"
                         f"Assistant:"
                     )
                     response = llm.generate_completion(system_instruction, prompt)
@@ -172,9 +221,18 @@ def main():
                 
                 if sources_list:
                     console.print(f"[dim]📚 Sources cited: {', '.join(sources_list)}[/dim]")
+                    
+                # If show_detailed_sources toggle is enabled, print the full texts
+                if show_detailed_sources:
+                    console.print("\n[bold yellow]--- DETAILED CONTEXT USED ---[/bold yellow]")
+                    for idx, (r, score) in enumerate(similarities[:args.top], 1):
+                        console.print(f"\n[bold magenta][{idx}] {r['source_title']} by {r['source_author']} (Score: {score:.4f})[/bold magenta]")
+                        console.print(f"{r['text'].strip()}")
+                    console.print("[bold yellow]-----------------------------[/bold yellow]")
+                    
                 console.print("[dim]" + "-" * 50 + "[/dim]\n")
                 
-                chat_history.append(("User", user_input))
+                chat_history.append(("User", clean_input))
                 chat_history.append(("Assistant", response))
             except Exception as e:
                 console.print(f"[bold red]Error generating answer:[/bold red] {e}\n")
