@@ -66,22 +66,28 @@ flowchart TD
 
 ## 🚀 Setup & Installation
 
-### 1. One-Command Installation (Recommended)
-To automatically clone, install, link the global `psyche` command, and configure your environment in a single interactive step, run:
-```bash
-curl -sSL https://raw.githubusercontent.com/Nam-Aniket/knowledge-project/main/install.sh | bash
-```
-
----
-
-### 2. Manual Installation (From Source)
-If you prefer to clone and install the repository manually:
+### 1. Run the Setup Command (Recommended)
+Clone the repository and run the setup script:
 ```bash
 git clone https://github.com/Nam-Aniket/knowledge-project.git
 cd knowledge-project
+./setup.sh
+```
+
+This script will automatically:
+1. Initialize a Python virtual environment (`.venv`) if it doesn't exist.
+2. Install all dependencies and the package in editable mode.
+3. Link the global `psyche` command so you can run it from any directory.
+4. **Launch the Interactive Setup Wizard** to configure your model provider (Gemini, OpenAI, Ollama, or AI-Free) and API keys.
+
+---
+
+### 2. Manual Installation
+If you prefer not to use the shell script, you can run the setup command directly in Python:
+```bash
 python3 cli.py setup
 ```
-*(This initializes the virtual environment, installs dependencies, links the global `psyche` executable, and runs the interactive setup wizard).*
+
 
 
 
