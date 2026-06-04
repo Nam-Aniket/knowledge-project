@@ -117,22 +117,6 @@ def retrieve_graph_tool(topic=None):
 def main():
     log("Server starting on stdio transport...")
     
-    # Warm up LLM client and run migrations on startup (to prevent timeouts during first queries)
-    try:
-        db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
-        log(f"Warming up LLM Client and checking database {db_path}...")
-        llm = LLMClient()
-        check_and_migrate_embeddings(db_path, llm)
-        
-        # If using local ONNX embeddings, pre-load/download the model on startup so tool calls are instant
-        if llm.provider == "local":
-            log("Pre-loading local ONNX embedding model...")
-            llm.get_embedding("warmup")
-            
-        log("Warm up and database migration checked successfully.")
-    except Exception as e:
-        log(f"Warning during server warm up: {e}")
-    
     while True:
         try:
             line = sys.stdin.readline()

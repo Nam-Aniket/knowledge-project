@@ -49,3 +49,40 @@ try {
   console.error('❌ Failed to install Python dependencies:', err.message);
   process.exit(1);
 }
+
+// 5. Register custom prompt slash command in Codex and Gemini directories
+try {
+  const os = require('os');
+  const home = os.homedir();
+  
+  // Codex prompts
+  const codexPromptsDir = path.join(home, '.codex', 'prompts');
+  if (!fs.existsSync(codexPromptsDir)) {
+    fs.mkdirSync(codexPromptsDir, { recursive: true });
+  }
+  const promptContent = `---
+description: Query the Psyche database for your books and notes
+argument-hint: [query]
+---
+Please search your knowledge base for "$ARGUMENTS" using the \`psyche\` MCP server's \`search_knowledge\` tool, and summarize the relevant passages and concepts to answer the question.
+`;
+  fs.writeFileSync(path.join(codexPromptsDir, 'psyche.md'), promptContent, 'utf8');
+  console.log('✅ Registered Codex slash command prompt.');
+
+  // Gemini commands
+  const geminiCommandsDir = path.join(home, '.gemini', 'commands');
+  if (!fs.existsSync(geminiCommandsDir)) {
+    fs.mkdirSync(geminiCommandsDir, { recursive: true });
+  }
+  fs.writeFileSync(path.join(geminiCommandsDir, 'psyche.md'), promptContent, 'utf8');
+  
+  const geminiTomlContent = `description = "Query the Psyche database for your books and notes"
+prompt = """
+Please search your knowledge base for "$ARGUMENTS" using the \`psyche\` MCP server's \`search_knowledge\` tool, and summarize the relevant passages and concepts to answer the question.
+"""
+`;
+  fs.writeFileSync(path.join(geminiCommandsDir, 'psyche.toml'), geminiTomlContent, 'utf8');
+  console.log('✅ Registered Gemini/Antigravity slash command prompt.');
+} catch (err) {
+  console.warn('⚠️ Warning: Could not register slash command prompts:', err.message);
+}
