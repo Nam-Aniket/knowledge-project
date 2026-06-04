@@ -88,10 +88,6 @@ If you prefer not to use the shell script, you can run the setup command directl
 python3 cli.py setup
 ```
 
-
-
-
-
 ---
 
 ## 📖 CLI Usage Reference
@@ -143,24 +139,21 @@ psyche start-mcp
 
 ## 🔌 Integrating with Antigravity / Claude
 
-To expose your books and notes database directly to coding assistants, add the following to your configuration file (e.g., `~/Library/Application Support/Claude/claude_desktop_config.json`):
+To expose your books and notes database directly to coding assistants, add the following configuration block to your MCP host configuration file (e.g., `~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "psyche": {
-      "command": "/Users/aniketnamjoshi/knowledge-project/.venv/bin/python",
+      "command": "psyche",
       "args": [
-        "/Users/aniketnamjoshi/knowledge-project/cli.py",
         "start-mcp"
-      ],
-      "env": {
-        "DATABASE_PATH": "/Users/aniketnamjoshi/knowledge-project/data/knowledge.db"
-      }
+      ]
     }
   }
 }
 ```
+*(Note: If the global `psyche` command is not in your editor/client's environment PATH, you can use the absolute path to the virtualenv Python and script, e.g. command: `/Users/username/.psyche/.venv/bin/python` and args: `["/Users/username/.psyche/cli.py", "start-mcp"]`).*
 
 ---
 
