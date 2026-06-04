@@ -411,25 +411,25 @@ class TestCLIAndRouting(unittest.TestCase):
 
     @mock.patch('ingest.main')
     def test_cli_topic_routing(self, mock_ingest):
-        sys.argv = ["knowledge", "ingest", "--topic", "custom_topic", "path/to/notes"]
+        sys.argv = ["psyche", "ingest", "--topic", "custom_topic", "path/to/notes"]
         import cli
         cli.main()
         
         # Verify environment variable was set
         self.assertEqual(os.environ.get("DATABASE_PATH"), os.path.join("data", "topic_custom_topic.db"))
         # Verify --topic and its value were removed, and subcommand "ingest" was popped
-        self.assertEqual(sys.argv, ["knowledge", "path/to/notes"])
+        self.assertEqual(sys.argv, ["psyche", "path/to/notes"])
         mock_ingest.assert_called_once()
 
     @mock.patch('query.main')
     def test_cli_profile_routing(self, mock_query):
-        sys.argv = ["knowledge", "query", "--profile", "philosophy", "What is Stoicism?"]
+        sys.argv = ["psyche", "query", "--profile", "philosophy", "What is Stoicism?"]
         import cli
         cli.main()
         
         # Verify environment variable was set
         self.assertEqual(os.environ.get("DATABASE_PATH"), os.path.join("data", "topic_philosophy.db"))
-        self.assertEqual(sys.argv, ["knowledge", "What is Stoicism?"])
+        self.assertEqual(sys.argv, ["psyche", "What is Stoicism?"])
         mock_query.assert_called_once()
 
 class TestRAGPureRetrieval(unittest.TestCase):
@@ -459,7 +459,7 @@ class TestRAGPureRetrieval(unittest.TestCase):
         
         # Mock sys.argv to run query
         # Using sys.exit mocking to verify it runs and exits 0
-        with patch('sys.argv', ['knowledge', 'Stoic focus', '--db-path', self.db_path]), \
+        with patch('sys.argv', ['psyche', 'Stoic focus', '--db-path', self.db_path]), \
              patch('sys.exit') as mock_exit:
             query.main()
             mock_exit.assert_called_with(0)
@@ -505,7 +505,7 @@ class TestMCPHostServer(unittest.TestCase):
         
         # Response 1: initialize
         self.assertEqual(responses[0]["id"], 1)
-        self.assertEqual(responses[0]["result"]["serverInfo"]["name"], "local-knowledge-mcp")
+        self.assertEqual(responses[0]["result"]["serverInfo"]["name"], "psyche-mcp")
         
         # Response 2: tools/list
         self.assertEqual(responses[1]["id"], 2)

@@ -28,7 +28,7 @@ def main():
         os.environ["DATABASE_PATH"] = os.path.join("data", f"topic_{topic_name}.db")
 
     if len(sys.argv) < 2:
-        print("Usage: knowledge [ingest | query | chat | build-graph | start-mcp] [options]")
+        print("Usage: psyche [ingest | query | chat | build-graph | start-mcp] [options]")
         sys.exit(1)
         
     subcommand = sys.argv[1].lower()

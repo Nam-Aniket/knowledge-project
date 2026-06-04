@@ -16,7 +16,7 @@ from query import perform_hybrid_search, format_context, retrieve_concept_contex
 from llm_client import LLMClient
 
 def log(msg):
-    sys.stderr.write(f"[Knowledge MCP] {msg}\n")
+    sys.stderr.write(f"[Psyche MCP] {msg}\n")
     sys.stderr.flush()
 
 def search_knowledge_tool(query_text, topic=None, top=5):
@@ -92,7 +92,7 @@ def retrieve_graph_tool(topic=None):
         conn.close()
         
     if not concepts:
-        return "No concepts found in the graph. Run 'knowledge build-graph' to extract them."
+        return "No concepts found in the graph. Run 'psyche build-graph' to extract them."
         
     output = "### CONCEPTS\n"
     for name, definition, category in concepts:
@@ -134,7 +134,7 @@ def main():
                         "tools": {}
                     },
                     "serverInfo": {
-                        "name": "local-knowledge-mcp",
+                        "name": "psyche-mcp",
                         "version": "0.2.0"
                     }
                 }
