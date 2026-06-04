@@ -4,3 +4,4 @@ pypdf>=4.0.0
 numpy>=1.26.0
 rich>=13.7.0
 prompt-toolkit>=3.0.43
+fastembed>=0.3.0
