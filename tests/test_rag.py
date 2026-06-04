@@ -281,6 +281,65 @@ class TestRAGOllamaSupport(unittest.TestCase):
             res = client.generate_completion("instruction", "prompt")
             self.assertEqual(res, "hello there")
 
+class TestRAGConceptGraph(unittest.TestCase):
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        db.init_db(self.db_path)
+        self.conn = db.get_connection(self.db_path)
+
+    def tearDown(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def test_concepts_crud(self):
+        c1_id = db.add_concept(self.conn, "Stoicism", "An ancient Greek philosophy", "Philosophy")
+        c2_id = db.add_concept(self.conn, "Virtue", "Moral excellence", "Ethics")
+        
+        self.assertEqual(c1_id, 1)
+        self.assertEqual(c2_id, 2)
+        
+        link_id = db.add_concept_link(self.conn, "Stoicism", "Virtue", "values", "Stoics value virtue")
+        self.assertEqual(link_id, 1)
+        
+        concepts = db.get_all_concepts(self.conn)
+        self.assertEqual(len(concepts), 2)
+        self.assertEqual(concepts[0]["name"], "Stoicism")
+        self.assertEqual(concepts[1]["name"], "Virtue")
+        
+        links = db.get_concept_links(self.conn)
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0]["source"], "Stoicism")
+        self.assertEqual(links[0]["target"], "Virtue")
+        self.assertEqual(links[0]["relationship"], "values")
+        
+    def test_kmeans_clustering(self):
+        from build_graph import kmeans
+        embeddings = np.array([
+            [1.0, 0.0],
+            [0.9, 0.1],
+            [0.0, 1.0],
+            [0.1, 0.9]
+        ], dtype=np.float32)
+        
+        labels, centroids = kmeans(embeddings, num_clusters=2)
+        self.assertEqual(labels.shape[0], 4)
+        self.assertEqual(labels[0], labels[1])
+        self.assertEqual(labels[2], labels[3])
+        self.assertNotEqual(labels[0], labels[2])
+        self.assertEqual(centroids.shape, (2, 2))
+
+    def test_retrieve_concept_context(self):
+        db.add_concept(self.conn, "Stoicism", "An ancient Greek philosophy", "Philosophy")
+        db.add_concept(self.conn, "Virtue", "Moral excellence", "Ethics")
+        db.add_concept_link(self.conn, "Stoicism", "Virtue", "values", "Sole good")
+        
+        ctx = query.retrieve_concept_context(self.conn, "What is Stoicism and Virtue?")
+        self.assertIn("KNOWLEDGE CONCEPT GRAPH", ctx)
+        self.assertIn("Stoicism", ctx)
+        self.assertIn("Virtue", ctx)
+        self.assertIn("values", ctx)
+
 if __name__ == "__main__":
     import unittest.mock as mock
     unittest.main()
