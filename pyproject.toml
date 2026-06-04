@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psyche"
-version = "0.2.0"
+version = "0.3.0"
 description = "A lightweight, premium GraphRAG CLI engine for books and notes"
 readme = "README.md"
 authors = [
@@ -21,7 +21,8 @@ dependencies = [
     "pypdf>=4.0.0",
     "numpy>=1.24.0",
     "rich>=13.7.0",
-    "prompt-toolkit>=3.0.40"
+    "prompt-toolkit>=3.0.40",
+    "fastembed>=0.3.0"
 ]
 requires-python = ">=3.9"
 

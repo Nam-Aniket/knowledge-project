@@ -205,7 +205,7 @@ def build_concept_graph(db_path: str, num_clusters: int):
         console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
         sys.exit(1)
         
-    if llm.provider == "none":
+    if llm.provider in ("none", "local") or llm.chat_model == "none":
         build_cooccurrence_graph(db_path)
         return
 
