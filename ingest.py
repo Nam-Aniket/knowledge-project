@@ -62,8 +62,9 @@ def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 300) -> list[st
     return [c for c in chunks if len(c.strip()) > 50]
 
 def main():
-    parser = argparse.ArgumentParser(description="Ingest a book or document into the local RAG database.")
-    parser.add_argument("--path", required=True, help="Absolute or relative path to the book file or directory.")
+    parser = argparse.ArgumentParser(description="Ingest books or documents into the local RAG database.")
+    parser.add_argument("paths", nargs="*", help="One or more paths to book files or directories to ingest.")
+    parser.add_argument("--path", help="Legacy argument for path to a file or directory.")
     parser.add_argument("--title", help="Manual title override. Only applied when a single file is ingested.")
     parser.add_argument("--author", help="Author of the document. Default for directory scanning.")
     parser.add_argument("--db-path", help="Database file path override. Default is read from .env (DATABASE_PATH).")
@@ -73,34 +74,44 @@ def main():
     
     args = parser.parse_args()
     
-    # 1. Resolve paths
-    file_path = os.path.abspath(args.path)
-    if not os.path.exists(file_path):
-        console.print(f"[bold red]Error:[/bold red] Path not found at '{args.path}'", file=sys.stderr)
-        sys.exit(1)
+    # Resolve paths
+    raw_paths = list(args.paths)
+    if args.path:
+        raw_paths.append(args.path)
+        
+    if not raw_paths:
+        parser.error("At least one path must be specified. Usage: knowledge ingest <path1> <path2>...")
         
     db_path = args.db_path or os.getenv("DATABASE_PATH", "data/knowledge.db")
     init_db(db_path)
     
-    files_to_ingest = []
-    if os.path.isdir(file_path):
-        allowed_exts = None
-        if args.ext:
-            allowed_exts = {f".{ext.strip().lower().lstrip('.')}" for ext in args.ext.split(',')}
-        else:
-            allowed_exts = {".pdf", ".epub", ".txt", ".md", ".markdown"}
-            
-        for root, dirs, files in os.walk(file_path):
-            for file in files:
-                ext = os.path.splitext(file)[1].lower()
-                if ext in allowed_exts:
-                    files_to_ingest.append(os.path.join(root, file))
-        files_to_ingest.sort()
+    # Check extensions
+    allowed_exts = None
+    if args.ext:
+        allowed_exts = {f".{ext.strip().lower().lstrip('.')}" for ext in args.ext.split(',')}
     else:
-        files_to_ingest.append(file_path)
+        allowed_exts = {".pdf", ".epub", ".txt", ".md", ".markdown"}
         
+    files_to_ingest = []
+    for rp in raw_paths:
+        resolved_path = os.path.abspath(rp)
+        if not os.path.exists(resolved_path):
+            console.print(f"[bold red]Warning:[/bold red] Path not found at '{rp}'. Skipping.", file=sys.stderr)
+            continue
+            
+        if os.path.isdir(resolved_path):
+            for root, dirs, files in os.walk(resolved_path):
+                for file in files:
+                    ext = os.path.splitext(file)[1].lower()
+                    if ext in allowed_exts:
+                        files_to_ingest.append(os.path.join(root, file))
+        else:
+            files_to_ingest.append(resolved_path)
+            
+    files_to_ingest.sort()
+    
     if not files_to_ingest:
-        console.print(f"[bold yellow]Warning:[/bold yellow] No supported files found in path '{args.path}'.", file=sys.stderr)
+        console.print(f"[bold yellow]Warning:[/bold yellow] No supported files found in provided paths.", file=sys.stderr)
         sys.exit(0)
         
     conn = get_connection(db_path)

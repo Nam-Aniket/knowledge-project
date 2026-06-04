@@ -340,6 +340,40 @@ class TestRAGConceptGraph(unittest.TestCase):
         self.assertIn("Virtue", ctx)
         self.assertIn("values", ctx)
 
+class TestCLIAndRouting(unittest.TestCase):
+    def setUp(self):
+        self.old_argv = sys.argv.copy()
+        self.old_env_db = os.environ.get("DATABASE_PATH")
+
+    def tearDown(self):
+        sys.argv = self.old_argv
+        if self.old_env_db is not None:
+            os.environ["DATABASE_PATH"] = self.old_env_db
+        elif "DATABASE_PATH" in os.environ:
+            del os.environ["DATABASE_PATH"]
+
+    @mock.patch('ingest.main')
+    def test_cli_topic_routing(self, mock_ingest):
+        sys.argv = ["knowledge", "ingest", "--topic", "custom_topic", "path/to/notes"]
+        import cli
+        cli.main()
+        
+        # Verify environment variable was set
+        self.assertEqual(os.environ.get("DATABASE_PATH"), os.path.join("data", "topic_custom_topic.db"))
+        # Verify --topic and its value were removed, and subcommand "ingest" was popped
+        self.assertEqual(sys.argv, ["knowledge", "path/to/notes"])
+        mock_ingest.assert_called_once()
+
+    @mock.patch('query.main')
+    def test_cli_profile_routing(self, mock_query):
+        sys.argv = ["knowledge", "query", "--profile", "philosophy", "What is Stoicism?"]
+        import cli
+        cli.main()
+        
+        # Verify environment variable was set
+        self.assertEqual(os.environ.get("DATABASE_PATH"), os.path.join("data", "topic_philosophy.db"))
+        self.assertEqual(sys.argv, ["knowledge", "What is Stoicism?"])
+        mock_query.assert_called_once()
+
 if __name__ == "__main__":
-    import unittest.mock as mock
     unittest.main()

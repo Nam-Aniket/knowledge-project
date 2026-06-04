@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-knowledge"
+version = "0.2.0"
+description = "A lightweight, premium GraphRAG CLI engine for books and notes"
+readme = "README.md"
+authors = [
+    { name = "Nam-Aniket" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "pypdf>=4.0.0",
+    "numpy>=1.24.0",
+    "rich>=13.7.0",
+    "prompt-toolkit>=3.0.40"
+]
+requires-python = ">=3.9"
+
+[project.scripts]
+knowledge = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli", "db", "parsers", "ingest", "query", "llm_client", "build_graph"]
