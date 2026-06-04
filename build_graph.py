@@ -15,6 +15,7 @@ from db import get_connection, get_all_embeddings_with_chunks, add_concept, add_
 from llm_client import LLMClient
 
 console = Console()
+err_console = Console(stderr=True)
 
 def kmeans(embeddings: np.ndarray, num_clusters: int, max_iter: int = 20):
     """Performs K-Means clustering on normalized embeddings using cosine similarity."""
@@ -335,7 +336,7 @@ def main():
     db_path = args.db_path or os.getenv("DATABASE_PATH", "data/knowledge.db")
     
     if not os.path.exists(db_path):
-        console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' not found. Please ingest some files first.", file=sys.stderr)
+        err_console.print(f"[bold red]Error:[/bold red] Database file '{db_path}' not found. Please ingest some files first.")
         sys.exit(1)
         
     build_concept_graph(db_path, args.clusters)

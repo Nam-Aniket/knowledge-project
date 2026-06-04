@@ -6,6 +6,7 @@ from rich.console import Console
 
 # Initialize rich console
 console = Console()
+err_console = Console(stderr=True)
 
 # Load environment variables
 load_dotenv()
@@ -94,7 +95,7 @@ def run_setup_wizard(env_path: str):
         # Reload environment variables
         load_dotenv(env_path, override=True)
     except Exception as e:
-        console.print(f"[bold red]Error saving configuration file:[/bold red] {e}", file=sys.stderr)
+        err_console.print(f"[bold red]Error saving configuration file:[/bold red] {e}")
         sys.exit(1)
 
 class LLMClient:

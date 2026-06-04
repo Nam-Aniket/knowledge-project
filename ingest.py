@@ -18,6 +18,7 @@ from llm_client import LLMClient
 
 # Initialize rich console
 console = Console()
+err_console = Console(stderr=True)
 
 # Load environment variables
 load_dotenv()
@@ -96,7 +97,7 @@ def main():
     for rp in raw_paths:
         resolved_path = os.path.abspath(rp)
         if not os.path.exists(resolved_path):
-            console.print(f"[bold red]Warning:[/bold red] Path not found at '{rp}'. Skipping.", file=sys.stderr)
+            err_console.print(f"[bold red]Warning:[/bold red] Path not found at '{rp}'. Skipping.")
             continue
             
         if os.path.isdir(resolved_path):
@@ -116,7 +117,7 @@ def main():
     files_to_ingest.sort()
     
     if not files_to_ingest:
-        console.print(f"[bold yellow]Warning:[/bold yellow] No supported files found in provided paths.", file=sys.stderr)
+        err_console.print(f"[bold yellow]Warning:[/bold yellow] No supported files found in provided paths.")
         sys.exit(0)
         
     conn = get_connection(db_path)
@@ -129,7 +130,7 @@ def main():
         console.print("[yellow]Initializing LLM Client...[/yellow]")
         llm_client = LLMClient()
     except Exception as e:
-        console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}", file=sys.stderr)
+        err_console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
         conn.close()
         sys.exit(1)
         
@@ -153,7 +154,7 @@ def main():
                 extracted_blocks = extract_text(path)
                 
             if not extracted_blocks:
-                console.print(f"[bold red]Failed:[/bold red] No text could be extracted from '{path}'.", file=sys.stderr)
+                err_console.print(f"[bold red]Failed:[/bold red] No text could be extracted from '{path}'.")
                 failed_count += 1
                 continue
                 
@@ -168,7 +169,7 @@ def main():
                     })
                     
             if not chunks:
-                console.print(f"[bold red]Failed:[/bold red] No text chunks created. Content is too short.", file=sys.stderr)
+                err_console.print(f"[bold red]Failed:[/bold red] No text chunks created. Content is too short.")
                 failed_count += 1
                 continue
                 
@@ -188,11 +189,11 @@ def main():
                             embeddings.extend(sub_embeddings)
                             progress.update(task, advance=len(sub_batch))
                         except Exception as api_err:
-                            console.print(f"\n[bold red]API Error during batch starting at chunk {i}:[/bold red] {api_err}", file=sys.stderr)
+                            err_console.print(f"\n[bold red]API Error during batch starting at chunk {i}:[/bold red] {api_err}")
                             raise api_err
                             
                 if len(embeddings) != len(chunks):
-                    console.print(f"[bold red]Error:[/bold red] Generated {len(embeddings)} embeddings for {len(chunks)} chunks.", file=sys.stderr)
+                    err_console.print(f"[bold red]Error:[/bold red] Generated {len(embeddings)} embeddings for {len(chunks)} chunks.")
                     failed_count += 1
                     continue
             else:
@@ -212,7 +213,7 @@ def main():
             success_count += 1
             
         except Exception as file_err:
-            console.print(f"[bold red]Failed to ingest {os.path.basename(path)}:[/bold red] {file_err}", file=sys.stderr)
+            err_console.print(f"[bold red]Failed to ingest {os.path.basename(path)}:[/bold red] {file_err}")
             failed_count += 1
             conn.rollback()
             
