@@ -13,8 +13,8 @@ load_dotenv()
 
 def check_and_run_setup():
     """Checks if .env is missing or unconfigured and runs an interactive setup wizard if needed."""
-    # Prevent blocking during unit testing
-    if "unittest" in sys.modules or os.getenv("TESTING") == "true":
+    # Prevent blocking during unit testing or non-interactive environments
+    if "unittest" in sys.modules or os.getenv("TESTING") == "true" or not sys.stdin.isatty():
         return
         
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -39,9 +39,10 @@ def run_setup_wizard(env_path: str):
     console.print("  [bold]1[/bold]) Gemini API (Recommended - requires Gemini API Key)")
     console.print("  [bold]2[/bold]) OpenAI API (Requires OpenAI API Key)")
     console.print("  [bold]3[/bold]) Ollama (100% Offline, Local & Free - requires local Ollama service running)")
-    console.print("  [bold]4[/bold]) AI-Free (Pure Retrieval - offline-only, no API key, FTS5-only search)")
+    console.print("  [bold]4[/bold]) Local / Offline (100% Offline, Free - uses local ONNX embeddings, no keys)")
+    console.print("  [bold]5[/bold]) AI-Free / Pure Retrieval (Offline-only, no API key, FTS5-only search)")
     
-    choice = Prompt.ask("Select option", choices=["1", "2", "3", "4"], default="1")
+    choice = Prompt.ask("Select option", choices=["1", "2", "3", "4", "5"], default="1")
     
     provider = "gemini"
     api_key = ""
@@ -65,6 +66,10 @@ def run_setup_wizard(env_path: str):
         embed_model = Prompt.ask("Enter embedding model name", default="nomic-embed-text")
         chat_model = Prompt.ask("Enter chat model name", default="llama3")
     elif choice == "4":
+        provider = "local"
+        embed_model = "BAAI/bge-small-en-v1.5"
+        chat_model = "none"
+    elif choice == "5":
         provider = "none"
         embed_model = "none"
         chat_model = "none"
@@ -87,6 +92,9 @@ def run_setup_wizard(env_path: str):
                 f.write(f"OLLAMA_HOST={ollama_host}\n")
                 f.write(f"EMBED_MODEL={embed_model}\n")
                 f.write(f"CHAT_MODEL={chat_model}\n")
+            elif provider == "local":
+                f.write(f"EMBED_MODEL={embed_model}\n")
+                f.write(f"CHAT_MODEL={chat_model}\n")
             elif provider == "none":
                 f.write(f"EMBED_MODEL={embed_model}\n")
                 f.write(f"CHAT_MODEL={chat_model}\n")
@@ -102,10 +110,11 @@ class LLMClient:
     def __init__(self):
         check_and_run_setup()
         
-        self.provider = os.getenv("LLM_PROVIDER", "gemini").lower()
+        self.provider = os.getenv("LLM_PROVIDER", "local").lower()
         self.gemini_key = os.getenv("GEMINI_API_KEY")
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        self._local_model = None
         
         # Configure models
         if self.provider == "openai":
@@ -114,6 +123,9 @@ class LLMClient:
         elif self.provider == "ollama":
             self.embed_model = os.getenv("EMBED_MODEL") or "nomic-embed-text"
             self.chat_model = os.getenv("CHAT_MODEL") or "llama3"
+        elif self.provider == "local":
+            self.embed_model = os.getenv("EMBED_MODEL") or "BAAI/bge-small-en-v1.5"
+            self.chat_model = "none"
         elif self.provider in ("none", "offline"):
             self.provider = "none"
             self.embed_model = "none"
@@ -135,6 +147,8 @@ class LLMClient:
             return self._get_openai_embedding(text)
         elif self.provider == "ollama":
             return self._get_ollama_embedding(text)
+        elif self.provider == "local":
+            return self._get_local_embedding(text)
         else:
             return self._get_gemini_embedding(text)
 
@@ -147,6 +161,8 @@ class LLMClient:
             return self._get_openai_embeddings_batch(texts)
         elif self.provider == "ollama":
             return self._get_ollama_embeddings_batch(texts)
+        elif self.provider == "local":
+            return self._get_local_embeddings_batch(texts)
         else:
             return self._get_gemini_embeddings_batch(texts)
 
@@ -358,3 +374,29 @@ class LLMClient:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError):
             raise RuntimeError(f"Unexpected response format from OpenAI: {data}")
+
+    # --- LOCAL EMBEDDINGS (ONNX) IMPLEMENTATIONS ---
+
+    def _init_local_model(self):
+        if self._local_model is None:
+            try:
+                from fastembed import TextEmbedding
+                model_name = self.embed_model if self.embed_model and self.embed_model != "none" else "BAAI/bge-small-en-v1.5"
+                self._local_model = TextEmbedding(model_name=model_name)
+            except ImportError:
+                raise ImportError(
+                    "The 'fastembed' library is required for local/offline embeddings.\n"
+                    "Please install it using: pip install fastembed"
+                )
+
+    def _get_local_embedding(self, text: str) -> list[float]:
+        self._init_local_model()
+        embeddings = list(self._local_model.embed([text]))
+        return [float(x) for x in embeddings[0]]
+
+    def _get_local_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        self._init_local_model()
+        embeddings = list(self._local_model.embed(texts))
+        return [[float(x) for x in emb] for emb in embeddings]
