@@ -410,7 +410,7 @@ def main():
                     finally:
                         conn.close()
                 
-                if llm.provider == "none":
+                if llm.provider == "none" or getattr(llm, "chat_model", "none") == "none":
                     console.print(f"\n[bold yellow]Offline / AI-Free (Pure Retrieval) Matches for:[/bold yellow] '{clean_input}'")
                     if not similarities:
                         console.print("  [dim]No matching text passages found.[/dim]")
@@ -518,7 +518,7 @@ def main():
                 finally:
                     conn.close()
             
-            if llm.provider == "none":
+            if llm.provider == "none" or getattr(llm, "chat_model", "none") == "none":
                 console.print("\n" + "=" * 50)
                 console.print("[bold yellow]OFFLINE / AI-FREE (PURE RETRIEVAL) RESULT[/bold yellow]")
                 console.print("=" * 50)

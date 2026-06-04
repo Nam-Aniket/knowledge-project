@@ -168,6 +168,8 @@ class LLMClient:
 
     def generate_completion(self, system_instruction: str, prompt: str) -> str:
         """Generates a chat completion response from the configured LLM."""
+        if self.chat_model == "none":
+            raise RuntimeError("Chat completion is disabled when chat model is 'none'.")
         if self.provider == "openai":
             return self._generate_openai_completion(system_instruction, prompt)
         elif self.provider == "ollama":
