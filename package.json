@@ -1,0 +1,32 @@
+{
+  "name": "psyche-rag",
+  "version": "0.2.0",
+  "description": "Offline GraphRAG and MCP engine for books and Obsidian notes",
+  "main": "bin/cli.js",
+  "bin": {
+    "psyche": "./bin/cli.js"
+  },
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "keywords": [
+    "rag",
+    "graphrag",
+    "mcp",
+    "obsidian",
+    "knowledge",
+    "ai"
+  ],
+  "author": "Nam-Aniket",
+  "license": "MIT",
+  "dependencies": {},
+  "files": [
+    "bin/",
+    "postinstall.js",
+    "*.py",
+    "requirements.txt",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE"
+  ]
+}
