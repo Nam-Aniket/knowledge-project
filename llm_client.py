@@ -14,7 +14,7 @@ load_dotenv()
 def check_and_run_setup():
     """Checks if .env is missing or unconfigured and runs an interactive setup wizard if needed."""
     # Prevent blocking during unit testing or non-interactive environments
-    if "unittest" in sys.modules or os.getenv("TESTING") == "true" or not sys.stdin.isatty():
+    if "unittest" in sys.modules or os.getenv("TESTING") == "true" or os.getenv("PSYCHE_NONINTERACTIVE") == "1" or not sys.stdin.isatty():
         return
         
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")

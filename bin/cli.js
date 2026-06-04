@@ -23,13 +23,20 @@ if (!fs.existsSync(pythonBin)) {
 // 2. Forward arguments and streams to cli.py
 const args = ['-u', cliScript, ...process.argv.slice(2)];
 
-// Inherit stdio to support interactive prompts (REPL) and standard stream pipes for MCP
+const isMcp = process.argv.includes('start-mcp');
+
+// Decouple stdio for MCP to prevent PTY/TTY inheritance which causes hangs and echoes
 const child = spawn(pythonBin, args, {
-  stdio: 'inherit',
+  stdio: isMcp ? ['pipe', 'pipe', 'inherit'] : 'inherit',
   env: {
     ...process.env
   }
 });
+
+if (isMcp) {
+  process.stdin.pipe(child.stdin);
+  child.stdout.pipe(process.stdout);
+}
 
 child.on('close', (code) => {
   process.exit(code ?? 0);

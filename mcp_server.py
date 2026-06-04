@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import sys
 import os
+
+# Signal that the process is running in a non-interactive MCP context
+os.environ["PSYCHE_NONINTERACTIVE"] = "1"
+
 import json
 import traceback
 

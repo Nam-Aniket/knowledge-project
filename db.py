@@ -360,7 +360,7 @@ def check_and_migrate_embeddings(db_path: str, llm):
 
         # If running in a non-interactive environment (like MCP server), skip heavy migration to prevent timeouts
         import sys
-        if not sys.stdin.isatty() and "unittest" not in sys.modules and os.getenv("TESTING") != "true":
+        if (not sys.stdin.isatty() or os.getenv("PSYCHE_NONINTERACTIVE") == "1") and "unittest" not in sys.modules and os.getenv("TESTING") != "true":
             sys.stderr.write(
                 f"[Psyche] Mismatched embedding model detected (DB: {db_model or 'none'} vs Config: {config_model}).\n"
                 "[Psyche] Skipped automatic embedding migration in non-interactive session to prevent timeout.\n"
