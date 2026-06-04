@@ -66,26 +66,28 @@ flowchart TD
 
 ## 🚀 Setup & Installation
 
-### 1. Global Installation (Recommended)
-You can install `psyche` globally from the git repository without manually cloning or setting up symlinks (like `npm install -g`):
-```bash
-pipx install git+https://github.com/Nam-Aniket/knowledge-project.git
-```
-*(If you do not have `pipx` installed, you can use `pip install git+https://github.com/Nam-Aniket/knowledge-project.git` instead).*
-
-### 2. Manual / Developer Installation (From Source)
-If you have cloned the repository locally, you can initialize the environment, install dependencies, link the global `psyche` command, and launch the configuration wizard with a single command:
+### 1. Run the Interactive Setup (Recommended)
+If you have cloned the repository locally, run the setup command:
 ```bash
 python3 cli.py setup
 ```
 *(Alternatively, you can run `./setup.sh` which delegates directly to the Python setup command).*
 
-### 3. Interactive Configuration
-Once installed, start the interactive chat from any directory to run the setup wizard and configure your model provider (Gemini, OpenAI, Ollama, or AI-Free):
+This command will:
+1. Initialize a Python virtual environment (`.venv`) if it doesn't exist.
+2. Install all dependencies and the package in editable mode.
+3. Link the global `psyche` command so you can run it from any directory.
+4. **Automatically launch the Interactive Setup Wizard** to configure your model provider (Gemini, OpenAI, Ollama, or AI-Free) and API keys.
+
+---
+
+### 2. Global Installation (Alternative)
+For advanced users who prefer not to clone the repository, you can install the CLI globally using `pipx`:
 ```bash
-psyche chat
+pipx install git+https://github.com/Nam-Aniket/knowledge-project.git
 ```
-The wizard runs automatically on the first start (or if you run `psyche setup` or `python3 cli.py setup`) to write your `.env` config file and immediately start chatting!
+*(After installing via `pipx`, you must run `psyche setup` manually to trigger the interactive configuration wizard).*
+
 
 
 ---
