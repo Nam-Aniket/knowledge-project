@@ -21,7 +21,7 @@ if (!fs.existsSync(pythonBin)) {
 }
 
 // 2. Forward arguments and streams to cli.py
-const args = [cliScript, ...process.argv.slice(2)];
+const args = ['-u', cliScript, ...process.argv.slice(2)];
 
 // Inherit stdio to support interactive prompts (REPL) and standard stream pipes for MCP
 const child = spawn(pythonBin, args, {
