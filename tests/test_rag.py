@@ -60,6 +60,29 @@ class TestRAGDatabase(unittest.TestCase):
         self.assertEqual(records[0]["source_author"], "Test Author")
         np.testing.assert_array_almost_equal(records[0]["embedding"], np.array(embedding_vector, dtype=np.float32))
 
+    def test_fts_search(self):
+        # 1. Add source and chunk
+        source_id = db.add_source(
+            self.conn, 
+            title="Book A", 
+            author="Author A", 
+            file_path="tests/dummy.txt", 
+            checksum="unique_checksum_fts"
+        )
+        chunk_id = db.add_chunk(self.conn, source_id, chunk_index=0, text="The quick brown fox jumps over the lazy dog.")
+        db.add_embedding(self.conn, chunk_id, [0.1, 0.2])
+        
+        # 2. Search FTS5
+        results = db.search_fts(self.conn, "brown fox")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["chunk_id"], chunk_id)
+        self.assertEqual(results[0]["text"], "The quick brown fox jumps over the lazy dog.")
+        self.assertEqual(results[0]["source_title"], "Book A")
+        
+        # 3. Search with non-matching query
+        no_results = db.search_fts(self.conn, "nonexistentword")
+        self.assertEqual(len(no_results), 0)
+
 class TestRAGParsers(unittest.TestCase):
     def setUp(self):
         # Create a temporary txt file
@@ -123,6 +146,31 @@ class TestRAGCosineSimilarity(unittest.TestCase):
         # Match 2 should be lowest (score = 0.0)
         self.assertEqual(similarities[2][0]["chunk_id"], 2)
         self.assertAlmostEqual(similarities[2][1], 0.0, places=4)
+
+class TestRAGHybridSearch(unittest.TestCase):
+    def test_rrf_reranking(self):
+        semantic_results = [
+            ({"chunk_id": 101, "text": "Semantic Match A"}, 0.95),
+            ({"chunk_id": 102, "text": "Semantic Match B"}, 0.88),
+            ({"chunk_id": 103, "text": "Semantic Match C"}, 0.70)
+        ]
+        keyword_results = [
+            {"chunk_id": 103, "text": "Semantic Match C"}, # Keyword ranked #1
+            {"chunk_id": 101, "text": "Semantic Match A"}  # Keyword ranked #2
+        ]
+        
+        # Run RRF
+        combined = query.reciprocal_rank_fusion(semantic_results, keyword_results, k=60)
+        
+        # Verify scores and ranking
+        self.assertEqual(len(combined), 3)
+        self.assertEqual(combined[0][0]["chunk_id"], 101)
+        self.assertEqual(combined[1][0]["chunk_id"], 103)
+        self.assertEqual(combined[2][0]["chunk_id"], 102)
+        
+        self.assertAlmostEqual(combined[0][1], 1/61 + 1/62, places=6)
+        self.assertAlmostEqual(combined[1][1], 1/63 + 1/61, places=6)
+        self.assertAlmostEqual(combined[2][1], 1/62, places=6)
 
 if __name__ == "__main__":
     unittest.main()
