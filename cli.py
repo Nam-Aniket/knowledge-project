@@ -28,7 +28,7 @@ def main():
         os.environ["DATABASE_PATH"] = os.path.join("data", f"topic_{topic_name}.db")
 
     if len(sys.argv) < 2:
-        print("Usage: psyche [ingest | query | chat | build-graph | start-mcp] [options]")
+        print("Usage: psyche [setup | ingest | query | chat | build-graph | start-mcp] [options]")
         sys.exit(1)
         
     subcommand = sys.argv[1].lower()
@@ -36,7 +36,10 @@ def main():
     # Modify sys.argv to strip the subcommand name for sub-parsers
     sys.argv.pop(1)
     
-    if subcommand == "ingest":
+    if subcommand == "setup":
+        import setup_cmd
+        setup_cmd.run_setup()
+    elif subcommand == "ingest":
         import ingest
         ingest.main()
     elif subcommand == "query":
@@ -59,7 +62,7 @@ def main():
             sys.exit(1)
     else:
         print(f"Unknown command: {subcommand}")
-        print("Available commands: ingest, query, chat, build-graph, start-mcp")
+        print("Available commands: setup, ingest, query, chat, build-graph, start-mcp")
         sys.exit(1)
 
 if __name__ == "__main__":

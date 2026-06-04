@@ -7,14 +7,16 @@
 
 A premium, lightweight, completely offline-capable **GraphRAG & RAG Engine** for your Obsidian notes, books, and documents. Connect your second brain directly to coding assistants (like Antigravity or Claude) using the built-in **Model Context Protocol (MCP) Server**, or query and chat with it locally via an interactive terminal interface.
 
-```
-    ____                      __            
-   / __ \_____ __  __ _____  / /_   ___     
-  / /_/ // ___// / / // ___// __ \ / _ \    
- / ____/(__  )/ /_/ // /__ / / / //  __/    
-/_/    /____/ \__, / \___//_/ /_/ \___/     
-             /____/                         
-```
+<p align="center">
+<pre>
+    ____  _____  __  __   ______ __  __ ______
+   / __ \/ ___/  \ \/ /  / ____// / / // ____/
+  / /_/ /\__ \    \  /  / /    / /_/ // __/   
+ / ____/___/ /    / /  / /___ / __  // /___   
+/_/    /____/    /_/   \____//_/ /_//_____/   
+</pre>
+</p>
+
 
 ---
 
@@ -64,19 +66,27 @@ flowchart TD
 
 ## 🚀 Setup & Installation
 
-### 1. Run the Setup Script
-To automatically create the virtual environment, install all dependencies, and register the global `psyche` command-line tool, run:
+### 1. Global Installation (Recommended)
+You can install `psyche` globally from the git repository without manually cloning or setting up symlinks (like `npm install -g`):
 ```bash
-./setup.sh
+pipx install git+https://github.com/Nam-Aniket/knowledge-project.git
 ```
-*(This automatically symlinks the executable to `/opt/homebrew/bin/psyche` or `/usr/local/bin/psyche` so you can run it from anywhere).*
+*(If you do not have `pipx` installed, you can use `pip install git+https://github.com/Nam-Aniket/knowledge-project.git` instead).*
 
-### 2. Run the Interactive Configuration Wizard
-To configure your AI provider (Gemini, OpenAI, Ollama, or AI-Free Mode), start the chat from any directory:
+### 2. Manual / Developer Installation (From Source)
+If you have cloned the repository locally, you can initialize the environment, install dependencies, link the global `psyche` command, and launch the configuration wizard with a single command:
+```bash
+python3 cli.py setup
+```
+*(Alternatively, you can run `./setup.sh` which delegates directly to the Python setup command).*
+
+### 3. Interactive Configuration
+Once installed, start the interactive chat from any directory to run the setup wizard and configure your model provider (Gemini, OpenAI, Ollama, or AI-Free):
 ```bash
 psyche chat
 ```
-The wizard will automatically launch on the first run, configure your `.env` settings, and drop you into the live shell!
+The wizard runs automatically on the first start (or if you run `psyche setup` or `python3 cli.py setup`) to write your `.env` config file and immediately start chatting!
+
 
 ---
 

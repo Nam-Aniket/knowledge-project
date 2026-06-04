@@ -176,78 +176,91 @@ def show_brain_splash():
     from rich.live import Live
     from rich.align import Align
     
-    frames = [
-        # Frame 1: organic outline only (dim)
-        """[dim purple]
-                 .---
-              .-'        
-            .-'          
-           /             
-          |              
-          |              
-           \\             
-            '-.          
-               '-.       
-                  '---
-        [/dim purple]""",
-        # Frame 2: organic structure forms
-        """[purple]
-                 .---~~~~
-              .-'  .  .  
-            .-'   /    \\ 
-           /     |     / 
-          |       \\___/  
-          |       /   \\  
-           \\     |     \\ 
-            '-.   \\___/  
-               '-.       
-                  '---___
-        [/purple]""",
-        # Frame 3: organic glows (cyan), digital blocks start appearing (dim grey blocks)
-        """[bold cyan]                 _---~~~~[/bold cyan]  [dim white]░░░░[/dim white]
-[bold cyan]              _-'  _.._  [/bold cyan]  [dim white]░░░░░░[/dim white]
-[bold cyan]            _-'   /    \\ [/bold cyan]  [dim white]░░░░░░░░[/dim white]
-[bold cyan]           /     |  o  / [/bold cyan]  [dim white]░░░░░░░░░[/dim white]
-[bold cyan]          |       \\___/  [/bold cyan]  [dim white]░░░░░░░░░░[/dim white]
-[bold cyan]          |       /   \\  [/bold cyan]  [dim white]░░░░░░░░░░[/dim white]
-[bold cyan]           \\     |  o  \\ [/bold cyan]  [dim white]░░░░░░░░░[/dim white]
-[bold cyan]            '-_   \\___/  [/bold cyan]  [dim white]░░░░░░[/dim white]
-[bold cyan]               '-_       [/bold cyan]  [dim white]░░░░[/dim white]
-[bold cyan]                  '---___[/bold cyan]  [dim white]░░[/dim white]""",
-        # Frame 4: organic bright, digital blocks solidify (medium blocks)
-        """[bold cyan]                 _---~~~~[/bold cyan]  [bright_green]▒▒▒▒▒▒▒-_[/bright_green]
-[bold cyan]              _-'  _.._  [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒'-_[/bright_green]
-[bold cyan]            _-'   /    \\ [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒'-_[/bright_green]
-[bold cyan]           /     |  o  / [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒▒\\[/bright_green]
-[bold cyan]          |       \\___/  [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒▒|[/bright_green]
-[bold cyan]          |       /   \\  [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒▒|[/bright_green]
-[bold cyan]           \\     |  o  \\ [/bold cyan]  [bright_green]▒▒▒▒▒▒▒▒▒/[/bright_green]
-[bold cyan]            '-_   \\___/  [/bold cyan]  [bright_green]▒▒▒▒▒▒_-[/bright_green]'
-[bold cyan]               '-_       [/bold cyan]  [bright_green]▒▒▒▒-[/bright_green]'
-[bold cyan]                  '---___[/bold cyan]  [bright_green]▒▒[/bright_green]'""",
-        # Frame 5: complete hybrid brain
-        """[bold cyan]                 _---~~~~[/bold cyan]  [bold green]███████-_[/bold green]
-[bold cyan]              _-'  _.._  [/bold cyan]  [bold green]████████'-_[/bold green]
-[bold cyan]            _-'   /    \\ [/bold cyan]  [bold green]█████████'-_[/bold green]
-[bold cyan]           /     |  o  / [/bold cyan]  [bold green]██████████\\[/bold green]
-[bold cyan]          |       \\___/  [/bold cyan]  [bold green]██████████|[/bold green]
-[bold cyan]          |       /   \\  [/bold cyan]  [bold green]██████████|[/bold green]
-[bold cyan]           \\     |  o  \\ [/bold cyan]  [bold green]█████████/[/bold green]
-[bold cyan]            '-_   \\___/  [/bold cyan]  [bold green]██████_-'[/bold green]
-[bold cyan]               '-_       [/bold cyan]  [bold green]████-'[/bold green]
-[bold cyan]                  '---___[/bold cyan]  [bold green]██'[/bold green]
-
-[bold magenta]               P  S  Y  C  H  E[/bold magenta]
-[dim cyan]          The AI-Powered Second Brain[/dim cyan]
-"""
+    # 6 ASCII letters, each exactly 10 characters wide in every row, and ending with a space to prevent escaping issues
+    letters = [
+        # P
+        [
+            "    ____  ",
+            "   / __ \\ ",
+            "  / /_/ / ",
+            " / ____/  ",
+            "/_/       "
+        ],
+        # S
+        [
+            " _____    ",
+            "/ ___/    ",
+            "\\__ \\     ",
+            "___/ /    ",
+            "/____/    "
+        ],
+        # Y
+        [
+            "__  __    ",
+            "\\ \\/ /    ",
+            " \\  /     ",
+            "  / /     ",
+            " /_/      "
+        ],
+        # C
+        [
+            " ______   ",
+            "/ ____/   ",
+            "/ /       ",
+            "/ /___    ",
+            "\\____/    "
+        ],
+        # H
+        [
+            " __  __   ",
+            "/ / / /   ",
+            "/ /_/ /   ",
+            "/ __  /   ",
+            "/_/ /_/   "
+        ],
+        # E
+        [
+            " ______   ",
+            "/ ____/   ",
+            "/ __/     ",
+            "/ /___    ",
+            "/_____/   "
+        ]
     ]
     
+    widths = [10, 10, 10, 10, 10, 10]
+    
+    frames = []
+    for i in range(6):
+        frame_rows = []
+        for L in range(5):
+            line_parts = []
+            for j in range(6):
+                if j <= i:
+                    line_parts.append(letters[j][L])
+                else:
+                    line_parts.append(" " * widths[j])
+            
+            line_str = "".join(line_parts)
+            padded_line = line_str.ljust(60)
+            frame_rows.append(f"[bold white]{padded_line}[/bold white]")
+            
+        if i == 5:
+            subtitle_centered = "The AI-Powered Second Brain".center(60)
+            frame_rows.append(f"\n[dim white]{subtitle_centered}[/dim white]")
+        else:
+            frame_rows.append("\n")
+            frame_rows.append("")
+            
+        frames.append("\n".join(frame_rows))
+        
     with Live(auto_refresh=False, transient=False) as live:
         for frame in frames:
             live.update(Align.center(frame))
             live.refresh()
-            time.sleep(0.18)
+            time.sleep(0.12)
         time.sleep(0.2)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Query the local knowledge base or start a chat session.")
