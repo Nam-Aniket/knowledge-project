@@ -24,6 +24,7 @@ def init_db(db_path: str):
         os.makedirs(db_dir, exist_ok=True)
         
     conn = sqlite3.connect(resolved_path)
+    conn.execute("PRAGMA journal_mode = WAL")
     cursor = conn.cursor()
     
     # Create sources table
@@ -113,6 +114,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     """Returns a connection to the SQLite database."""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 def check_checksum(conn: sqlite3.Connection, checksum: str) -> int | None:
