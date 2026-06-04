@@ -1,4 +1,5 @@
 import unittest
+import unittest.mock as mock
 import os
 import sqlite3
 import tempfile
@@ -232,5 +233,54 @@ class TestRAGDirectorySync(unittest.TestCase):
         self.assertNotIn("other.log", scanned_files)
         self.assertEqual(len(scanned_files), 3)
 
+class TestRAGOllamaSupport(unittest.TestCase):
+    @mock.patch('requests.post')
+    def test_ollama_embedding(self, mock_post):
+        # Configure mock response for /api/embed
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "embeddings": [[0.1, 0.2, 0.3]]
+        }
+        mock_post.return_value = mock_response
+
+        from llm_client import LLMClient
+        with mock.patch.dict(os.environ, {
+            "LLM_PROVIDER": "ollama",
+            "OLLAMA_HOST": "http://localhost:11434",
+            "EMBED_MODEL": "nomic-embed-text",
+            "CHAT_MODEL": "llama3",
+            "TESTING": "true"
+        }):
+            client = LLMClient()
+            emb = client.get_embedding("test query")
+            self.assertEqual(emb, [0.1, 0.2, 0.3])
+            
+    @mock.patch('requests.post')
+    def test_ollama_completion(self, mock_post):
+        # Configure mock response for /api/chat
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": {
+                "role": "assistant",
+                "content": "hello there"
+            }
+        }
+        mock_post.return_value = mock_response
+
+        from llm_client import LLMClient
+        with mock.patch.dict(os.environ, {
+            "LLM_PROVIDER": "ollama",
+            "OLLAMA_HOST": "http://localhost:11434",
+            "EMBED_MODEL": "nomic-embed-text",
+            "CHAT_MODEL": "llama3",
+            "TESTING": "true"
+        }):
+            client = LLMClient()
+            res = client.generate_completion("instruction", "prompt")
+            self.assertEqual(res, "hello there")
+
 if __name__ == "__main__":
+    import unittest.mock as mock
     unittest.main()
