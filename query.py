@@ -99,6 +99,70 @@ def format_context(similar_chunks: list[tuple[dict, float]], top_n: int = 5) -> 
         context_blocks.append(block)
     return "\n---\n".join(context_blocks)
 
+def retrieve_concept_context(conn: sqlite3.Connection, query_text: str) -> str:
+    """Retrieves matching concepts and their relationship links to form a GraphRAG context."""
+    import sqlite3
+    words = [w.strip("?,.!- ") for w in query_text.lower().split() if len(w.strip("?,.!- ")) > 3]
+    if not words:
+        return ""
+        
+    cursor = conn.cursor()
+    
+    # Avoid crash on older DBs
+    try:
+        cursor.execute("SELECT id, name, definition, category FROM concepts LIMIT 1")
+    except sqlite3.OperationalError:
+        return ""
+        
+    matched_concepts = []
+    for word in words:
+        cursor.execute("""
+            SELECT id, name, definition, category 
+            FROM concepts 
+            WHERE name LIKE ? OR definition LIKE ? OR category LIKE ?
+        """, (f"%{word}%", f"%{word}%", f"%{word}%"))
+        rows = cursor.fetchall()
+        for r in rows:
+            c_dict = {"id": r[0], "name": r[1], "definition": r[2], "category": r[3]}
+            if c_dict not in matched_concepts:
+                matched_concepts.append(c_dict)
+                
+    if not matched_concepts:
+        return ""
+        
+    concept_ids = [c["id"] for c in matched_concepts]
+    
+    # Fetch links
+    links_context = []
+    placeholders = ",".join("?" for _ in concept_ids)
+    cursor.execute(f"""
+        SELECT 
+            c1.name AS source_name, 
+            c2.name AS target_name, 
+            cl.relationship, 
+            cl.description 
+        FROM concept_links cl
+        JOIN concepts c1 ON cl.source_concept_id = c1.id
+        JOIN concepts c2 ON cl.target_concept_id = c2.id
+        WHERE cl.source_concept_id IN ({placeholders}) OR cl.target_concept_id IN ({placeholders})
+    """, concept_ids + concept_ids)
+    
+    rows = cursor.fetchall()
+    for r in rows:
+        links_context.append(f"Relationship: {r[0]} --({r[2]})--> {r[1]} ({r[3] or ''})")
+        
+    concept_blocks = []
+    concept_blocks.append("### KNOWLEDGE CONCEPT GRAPH:")
+    for c in matched_concepts[:5]:
+        concept_blocks.append(f"- Concept: {c['name']} (Category: {c['category'] or 'General'}): {c['definition'] or ''}")
+        
+    if links_context:
+        concept_blocks.append("\n### CONNECTIONS / RELATIONSHIPS:")
+        for link in links_context[:5]:
+            concept_blocks.append(f"- {link}")
+            
+    return "\n".join(concept_blocks)
+
 def main():
     parser = argparse.ArgumentParser(description="Query the local knowledge base or start a chat session.")
     parser.add_argument("query", nargs="?", help="The search query to answer. If omitted, and --chat is not set, prints database status.")
@@ -239,13 +303,24 @@ def main():
                     similarities = perform_hybrid_search(db_path, clean_input, records, llm)
                     context_str = format_context(similarities, top_n=args.top)
                     
+                    # Retrieve concept graph context
+                    conn = get_connection(db_path)
+                    try:
+                        graph_context = retrieve_concept_context(conn, clean_input)
+                    finally:
+                        conn.close()
+                        
+                    full_context = context_str
+                    if graph_context:
+                        full_context = f"{graph_context}\n\n---\n\n{context_str}"
+                    
                     # Prepare conversation prompt
                     history_str = ""
                     for role, text in chat_history[-6:]:
                         history_str += f"{role}: {text}\n"
                         
                     prompt = (
-                        f"### RETRIEVED CONTEXT FROM BOOKS:\n{context_str}\n\n"
+                        f"### RETRIEVED CONTEXT FROM BOOKS:\n{full_context}\n\n"
                         f"### CONVERSATION HISTORY:\n{history_str}"
                         f"User: {clean_input}\n"
                         f"Assistant:"
@@ -257,6 +332,26 @@ def main():
                 console.print(Markdown(response))
                 console.print("")
                 
+                # Show graph concepts matched if any
+                if graph_context:
+                    conn = get_connection(db_path)
+                    try:
+                        cursor = conn.cursor()
+                        words = [w.strip("?,.!- ") for w in clean_input.lower().split() if len(w.strip("?,.!- ")) > 3]
+                        matched_names = []
+                        if words:
+                            for word in words:
+                                cursor.execute("SELECT name FROM concepts WHERE name LIKE ?", (f"%{word}%",))
+                                for row in cursor.fetchall():
+                                    if row[0] not in matched_names:
+                                        matched_names.append(row[0])
+                        if matched_names:
+                            console.print(f"[dim]🧬 GraphRAG Concepts Matched: {', '.join(matched_names)}[/dim]")
+                    except Exception:
+                        pass
+                    finally:
+                        conn.close()
+                        
                 # Show sources used (top unique items from the retrieved list)
                 sources_list = []
                 for r, score in similarities[:args.top]:
@@ -292,8 +387,19 @@ def main():
                 similarities = perform_hybrid_search(db_path, query_text, records, llm)
                 context_str = format_context(similarities, top_n=args.top)
                 
+                # Retrieve concept graph context
+                conn = get_connection(db_path)
+                try:
+                    graph_context = retrieve_concept_context(conn, query_text)
+                finally:
+                    conn.close()
+                    
+                full_context = context_str
+                if graph_context:
+                    full_context = f"{graph_context}\n\n---\n\n{context_str}"
+                
                 prompt = (
-                    f"### RETRIEVED CONTEXT FROM BOOKS:\n{context_str}\n\n"
+                    f"### RETRIEVED CONTEXT FROM BOOKS:\n{full_context}\n\n"
                     f"User Query: {query_text}"
                 )
                 response = llm.generate_completion(system_instruction, prompt)
@@ -304,6 +410,26 @@ def main():
             console.print(Markdown(response))
             console.print("=" * 50)
             
+            # Show graph concepts matched if any
+            if graph_context:
+                conn = get_connection(db_path)
+                try:
+                    cursor = conn.cursor()
+                    words = [w.strip("?,.!- ") for w in query_text.lower().split() if len(w.strip("?,.!- ")) > 3]
+                    matched_names = []
+                    if words:
+                        for word in words:
+                            cursor.execute("SELECT name FROM concepts WHERE name LIKE ?", (f"%{word}%",))
+                            for row in cursor.fetchall():
+                                if row[0] not in matched_names:
+                                    matched_names.append(row[0])
+                    if matched_names:
+                        console.print(f"[dim]🧬 GraphRAG Concepts Cited: {', '.join(matched_names)}[/dim]")
+                except Exception:
+                    pass
+                finally:
+                    conn.close()
+                    
             console.print("\n[bold]📚 Context Sources Cited (RRF):[/bold]")
             for r, score in similarities[:args.top]:
                 loc_suffix = f" [{r['location']}]" if r.get('location') else ""

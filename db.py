@@ -61,6 +61,30 @@ def init_db(db_path: str):
         )
     """)
     
+    # Create concepts table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS concepts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            definition TEXT,
+            category TEXT
+        )
+    """)
+    
+    # Create concept_links table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS concept_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_concept_id INTEGER NOT NULL,
+            target_concept_id INTEGER NOT NULL,
+            relationship TEXT NOT NULL,
+            description TEXT,
+            FOREIGN KEY (source_concept_id) REFERENCES concepts (id) ON DELETE CASCADE,
+            FOREIGN KEY (target_concept_id) REFERENCES concepts (id) ON DELETE CASCADE,
+            UNIQUE(source_concept_id, target_concept_id, relationship)
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -198,3 +222,57 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
             "embedding": embedding
         })
     return results
+
+def add_concept(conn: sqlite3.Connection, name: str, definition: str | None = None, category: str | None = None) -> int:
+    """Inserts a concept if it doesn't exist, or updates its definition and category. Returns concept ID."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO concepts (name, definition, category)
+        VALUES (?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            definition = COALESCE(excluded.definition, definition),
+            category = COALESCE(excluded.category, category)
+    """, (name.strip(), definition, category))
+    conn.commit()
+    
+    cursor.execute("SELECT id FROM concepts WHERE name = ?", (name.strip(),))
+    return cursor.fetchone()[0]
+
+def add_concept_link(conn: sqlite3.Connection, source_name: str, target_name: str, relationship: str, description: str | None = None) -> int:
+    """Creates a directed relationship between two concepts by name. Auto-creates concepts if missing."""
+    source_id = add_concept(conn, source_name)
+    target_id = add_concept(conn, target_name)
+    
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO concept_links (source_concept_id, target_concept_id, relationship, description)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(source_concept_id, target_concept_id, relationship) DO UPDATE SET
+            description = COALESCE(excluded.description, description)
+    """, (source_id, target_id, relationship.strip(), description))
+    conn.commit()
+    return cursor.lastrowid
+
+def get_all_concepts(conn: sqlite3.Connection) -> list[dict]:
+    """Retrieves all concepts from the database."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, definition, category FROM concepts")
+    rows = cursor.fetchall()
+    return [{"id": r[0], "name": r[1], "definition": r[2], "category": r[3]} for r in rows]
+
+def get_concept_links(conn: sqlite3.Connection) -> list[dict]:
+    """Retrieves all concept relationship links with name values."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 
+            cl.id, 
+            c1.name AS source_name, 
+            c2.name AS target_name, 
+            cl.relationship, 
+            cl.description 
+        FROM concept_links cl
+        JOIN concepts c1 ON cl.source_concept_id = c1.id
+        JOIN concepts c2 ON cl.target_concept_id = c2.id
+    """)
+    rows = cursor.fetchall()
+    return [{"id": r[0], "source": r[1], "target": r[2], "relationship": r[3], "description": r[4]} for r in rows]
