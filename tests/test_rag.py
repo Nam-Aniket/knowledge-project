@@ -629,6 +629,52 @@ class TestMCPHostServer(unittest.TestCase):
         self.assertIn("messages", responses[2]["result"])
         self.assertIn("Use the following retrieved notes and passages", responses[2]["result"]["messages"][0]["content"]["text"])
 
+    @mock.patch('sys.stdin')
+    @mock.patch('mcp_server.real_stdout')
+    def test_mcp_tools_call(self, mock_stdout, mock_stdin):
+        import json
+        import mcp_server
+        
+        # Setup mock database with data
+        source_id = db.add_source(self.conn, "Book A", "Author A", "tests/dummy.txt", "unique_checksum_mcp")
+        chunk_id = db.add_chunk(self.conn, source_id, chunk_index=0, text="This is some Stoic focus text.", location="Chapter 1")
+        # Add a concept too
+        db.add_concept(self.conn, "Stoicism", "An ancient Greek philosophy", "Philosophy")
+        
+        # Setup mock stdin lines representing requests
+        mock_stdin.readline.side_effect = [
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "search_knowledge", "arguments": {"query": "Stoic focus"}}}) + "\n",
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "retrieve_graph", "arguments": {}}}) + "\n",
+            ""  # EOF to terminate loop
+        ]
+        
+        # Capture output written to stdout
+        written_data = []
+        def mock_write(data):
+            written_data.append(data)
+        mock_stdout.write.side_effect = mock_write
+        
+        with mock.patch.dict(os.environ, {"DATABASE_PATH": self.db_path, "LLM_PROVIDER": "none"}):
+            # Run main loop
+            mcp_server.main()
+        
+        # Parse the JSON response objects
+        responses = [json.loads(line) for line in "".join(written_data).split("\n") if line.strip()]
+        
+        self.assertEqual(len(responses), 2)
+        
+        # Response 1: search_knowledge
+        self.assertEqual(responses[0]["id"], 1)
+        self.assertIn("content", responses[0]["result"])
+        text_val = responses[0]["result"]["content"][0]["text"]
+        self.assertIn("Stoic focus", text_val)
+        
+        # Response 2: retrieve_graph
+        self.assertEqual(responses[1]["id"], 2)
+        self.assertIn("content", responses[1]["result"])
+        graph_val = responses[1]["result"]["content"][0]["text"]
+        self.assertIn("Stoicism", graph_val)
+
 class TestDatabaseMigration(unittest.TestCase):
     def setUp(self):
         self.db_fd, self.db_path = tempfile.mkstemp()
