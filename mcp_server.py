@@ -24,6 +24,15 @@ def log(msg):
     sys.stderr.flush()
 
 def search_knowledge_tool(query_text, topic=None, top=5):
+    import numpy as np
+    from db import get_all_embeddings_only
+    
+    # Resolve top parameter to int
+    try:
+        top = int(top)
+    except (ValueError, TypeError):
+        top = 5
+        
     # Resolve db path
     db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
     if topic:
@@ -43,16 +52,48 @@ def search_knowledge_tool(query_text, topic=None, top=5):
             embed_model = "none"
         llm = FakeLLM()
         
-    conn = get_connection(db_path)
-    try:
-        records = get_all_embeddings_with_chunks(conn)
-    finally:
-        conn.close()
+    # Fetch only IDs and embeddings
+    records = []
+    if llm.provider != "none":
+        conn = get_connection(db_path)
+        try:
+            records = get_all_embeddings_only(conn)
+        finally:
+            conn.close()
+            
+    chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
+    valid_embeddings = [r["embedding"] for r in records if r["embedding"] is not None]
+    if valid_embeddings:
+        embeddings_matrix = np.vstack(valid_embeddings)
+    else:
+        embeddings_matrix = np.array([], dtype=np.float32)
         
-    if not records:
+    # Load usearch index if available
+    usearch_index = None
+    if llm.provider != "none":
+        try:
+            from usearch.index import Index
+            index_path = db_path.replace(".db", "") + ".usearch"
+            if os.path.exists(index_path):
+                if len(records) > 0 and embeddings_matrix.size > 0:
+                    dim = embeddings_matrix.shape[1]
+                    usearch_index = Index(ndim=dim, metric="cosine")
+                    usearch_index.load(index_path)
+        except Exception:
+            usearch_index = None
+            
+    if len(records) == 0 and llm.provider != "none":
         return "Database is empty. Please ingest some documents first."
         
-    similarities = perform_hybrid_search(db_path, query_text, records, llm)
+    similarities = perform_hybrid_search(
+        db_path=db_path,
+        query_text=query_text,
+        chunk_ids=chunk_ids,
+        embeddings_matrix=embeddings_matrix,
+        llm=llm,
+        usearch_index=usearch_index,
+        limit=top
+    )
     context = format_context(similarities, top_n=top)
     
     # Check if there is graph context

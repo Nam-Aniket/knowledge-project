@@ -142,6 +142,75 @@ class TestRAGParsers(unittest.TestCase):
         _, tags2 = parse_obsidian_markdown(content2)
         self.assertEqual(tags2, ["stoicism", "discipline"])
 
+    def test_docx_parser(self):
+        import zipfile
+        fd, path = tempfile.mkstemp(suffix=".docx")
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(path, 'w') as docx:
+                xml_content = (
+                    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">\n'
+                    '<w:body>\n'
+                    '<w:p><w:r><w:t>Introduction</w:t></w:r></w:p>\n'
+                    '<w:p><w:r><w:t>This is a docx test content.</w:t></w:r></w:p>\n'
+                    '</w:body>\n'
+                    '</w:document>'
+                )
+                docx.writestr('word/document.xml', xml_content)
+                
+            blocks = parsers.extract_text(path)
+            self.assertEqual(len(blocks), 1)
+            self.assertEqual(blocks[0]["location"], "Introduction")
+            self.assertEqual(blocks[0]["text"].strip(), "This is a docx test content.")
+        finally:
+            os.unlink(path)
+
+    def test_org_parser(self):
+        fd, path = tempfile.mkstemp(suffix=".org")
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(
+                    "* Section One\n"
+                    "This is some text in section one.\n"
+                    "** Subsection\n"
+                    "More text.\n"
+                )
+            blocks = parsers.extract_text(path)
+            self.assertEqual(len(blocks), 2)
+            self.assertEqual(blocks[0]["location"], "Section One")
+            self.assertIn("This is some text in section one.", blocks[0]["text"])
+            self.assertEqual(blocks[1]["location"], "Subsection")
+            self.assertIn("More text.", blocks[1]["text"])
+        finally:
+            os.unlink(path)
+
+    def test_html_parser(self):
+        fd, path = tempfile.mkstemp(suffix=".html")
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(
+                    "<html>\n"
+                    "<head><title>Test Title</title></head>\n"
+                    "<body>\n"
+                    "<h1>Header 1</h1>\n"
+                    "<p>This is paragraph text.</p>\n"
+                    "<h2>Header 2</h2>\n"
+                    "<p>Paragraph two content.</p>\n"
+                    "</body>\n"
+                    "</html>\n"
+                )
+            blocks = parsers.extract_text(path)
+            self.assertEqual(len(blocks), 2)
+            self.assertEqual(blocks[0]["location"], "Header 1")
+            self.assertIn("This is paragraph text.", blocks[0]["text"])
+            self.assertEqual(blocks[1]["location"], "Header 2")
+            self.assertIn("Paragraph two content.", blocks[1]["text"])
+        finally:
+            os.unlink(path)
+
 class TestRAGTextChunking(unittest.TestCase):
     def test_chunk_text(self):
         # Provide a longer text to make sure the chunks generated are longer than 50 characters
@@ -559,6 +628,52 @@ class TestMCPHostServer(unittest.TestCase):
         self.assertEqual(responses[2]["id"], 3)
         self.assertIn("messages", responses[2]["result"])
         self.assertIn("Use the following retrieved notes and passages", responses[2]["result"]["messages"][0]["content"]["text"])
+
+    @mock.patch('sys.stdin')
+    @mock.patch('mcp_server.real_stdout')
+    def test_mcp_tools_call(self, mock_stdout, mock_stdin):
+        import json
+        import mcp_server
+        
+        # Setup mock database with data
+        source_id = db.add_source(self.conn, "Book A", "Author A", "tests/dummy.txt", "unique_checksum_mcp")
+        chunk_id = db.add_chunk(self.conn, source_id, chunk_index=0, text="This is some Stoic focus text.", location="Chapter 1")
+        # Add a concept too
+        db.add_concept(self.conn, "Stoicism", "An ancient Greek philosophy", "Philosophy")
+        
+        # Setup mock stdin lines representing requests
+        mock_stdin.readline.side_effect = [
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "search_knowledge", "arguments": {"query": "Stoic focus"}}}) + "\n",
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "retrieve_graph", "arguments": {}}}) + "\n",
+            ""  # EOF to terminate loop
+        ]
+        
+        # Capture output written to stdout
+        written_data = []
+        def mock_write(data):
+            written_data.append(data)
+        mock_stdout.write.side_effect = mock_write
+        
+        with mock.patch.dict(os.environ, {"DATABASE_PATH": self.db_path, "LLM_PROVIDER": "none"}):
+            # Run main loop
+            mcp_server.main()
+        
+        # Parse the JSON response objects
+        responses = [json.loads(line) for line in "".join(written_data).split("\n") if line.strip()]
+        
+        self.assertEqual(len(responses), 2)
+        
+        # Response 1: search_knowledge
+        self.assertEqual(responses[0]["id"], 1)
+        self.assertIn("content", responses[0]["result"])
+        text_val = responses[0]["result"]["content"][0]["text"]
+        self.assertIn("Stoic focus", text_val)
+        
+        # Response 2: retrieve_graph
+        self.assertEqual(responses[1]["id"], 2)
+        self.assertIn("content", responses[1]["result"])
+        graph_val = responses[1]["result"]["content"][0]["text"]
+        self.assertIn("Stoicism", graph_val)
 
 class TestDatabaseMigration(unittest.TestCase):
     def setUp(self):

@@ -345,6 +345,229 @@ def extract_txt_text(file_path: str) -> list[dict]:
             blocks = [{"text": content, "location": "Full Document"}]
         return blocks
 
+class HtmlTextParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.text_parts = []
+        self.ignore_tags = {'style', 'script', 'head', 'noscript', 'iframe', 'svg'}
+        self.ignore_depth = 0
+        self.block_tags = {
+            'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
+            'li', 'tr', 'blockquote', 'section', 'article', 
+            'aside', 'header', 'footer', 'br', 'pre'
+        }
+        self.headings = []
+        self.in_heading = False
+        self.heading_parts = []
+        
+    def handle_starttag(self, tag, attrs):
+        if tag in self.ignore_tags:
+            self.ignore_depth += 1
+            return
+            
+        if self.ignore_depth > 0:
+            return
+            
+        if tag in self.block_tags:
+            self.text_parts.append('\n')
+            
+        if tag in {'h1', 'h2', 'h3', 'h4'}:
+            self.in_heading = True
+            self.heading_parts = []
+            
+    def handle_endtag(self, tag):
+        if tag in self.ignore_tags:
+            self.ignore_depth = max(0, self.ignore_depth - 1)
+            return
+            
+        if self.ignore_depth > 0:
+            return
+            
+        if tag in self.block_tags:
+            self.text_parts.append('\n')
+            
+        if tag in {'h1', 'h2', 'h3', 'h4'}:
+            self.in_heading = False
+            heading_text = "".join(self.heading_parts).strip()
+            if heading_text:
+                self.headings.append(heading_text)
+            
+    def handle_data(self, data):
+        if self.ignore_depth > 0:
+            return
+        self.text_parts.append(data)
+        if self.in_heading:
+            self.heading_parts.append(data)
+            
+    def get_text(self):
+        raw_text = "".join(self.text_parts)
+        lines = []
+        for line in raw_text.split('\n'):
+            lines.append(line.strip())
+            
+        cleaned_lines = []
+        for line in lines:
+            if line:
+                cleaned_lines.append(line)
+            else:
+                if cleaned_lines and cleaned_lines[-1] != "":
+                    cleaned_lines.append("")
+                    
+        return "\n".join(cleaned_lines).strip()
+
+def extract_html_text(file_path: str) -> list[dict]:
+    """Extracts text from an HTML file, splitting by headings if present."""
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception as e:
+        raise ValueError(f"Failed to read HTML file: {e}")
+        
+    parser = HtmlTextParser()
+    parser.feed(content)
+    text = parser.get_text()
+    if not text:
+        return []
+        
+    blocks = []
+    if parser.headings:
+        import re
+        escaped_headings = [re.escape(h) for h in parser.headings if h.strip()]
+        if escaped_headings:
+            pattern = "|".join(f"(?:\\b{h}\\b)" for h in escaped_headings)
+            try:
+                sections = re.split(f"({pattern})", text)
+                current_location = "Intro"
+                current_text = ""
+                
+                for item in sections:
+                    if not item:
+                        continue
+                    item_strip = item.strip()
+                    if item_strip in parser.headings:
+                        if current_text.strip():
+                            blocks.append({
+                                "text": current_text.strip(),
+                                "location": current_location
+                            })
+                        current_location = item_strip
+                        current_text = ""
+                    else:
+                        current_text += "\n" + item
+                        
+                if current_text.strip():
+                    blocks.append({
+                        "text": current_text.strip(),
+                        "location": current_location
+                    })
+            except Exception:
+                blocks = [{"text": text, "location": "Full Document"}]
+        else:
+            blocks = [{"text": text, "location": "Full Document"}]
+    else:
+        blocks = [{"text": text, "location": "Full Document"}]
+        
+    if not blocks:
+        blocks = [{"text": text, "location": "Full Document"}]
+    return blocks
+
+def extract_docx_text(file_path: str) -> list[dict]:
+    """Extracts paragraph text from a DOCX file using standard zipfile and xml parsing."""
+    try:
+        with zipfile.ZipFile(file_path) as docx:
+            xml_content = docx.read('word/document.xml')
+            root = ET.fromstring(xml_content)
+            
+            namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+            
+            paragraphs = []
+            for p in root.findall('.//w:p', namespaces):
+                p_text = []
+                for t in p.findall('.//w:t', namespaces):
+                    if t.text:
+                        p_text.append(t.text)
+                if p_text:
+                    paragraphs.append("".join(p_text))
+                    
+            full_text = "\n\n".join(paragraphs)
+            if not full_text.strip():
+                return []
+                
+            blocks = []
+            current_lines = []
+            current_header = "Section 1"
+            
+            for p in paragraphs:
+                p_stripped = p.strip()
+                if not p_stripped:
+                    continue
+                
+                is_header = False
+                if len(p_stripped) < 80 and (p_stripped.lower().startswith(('chapter', 'section', 'part', 'introduction', 'conclusion', 'summary')) or p_stripped.isupper()):
+                    is_header = True
+                    
+                if is_header:
+                    if current_lines:
+                        blocks.append({
+                            "text": "\n".join(current_lines).strip(),
+                            "location": current_header
+                        })
+                        current_lines = []
+                    current_header = p_stripped
+                else:
+                    current_lines.append(p)
+                    
+            if current_lines:
+                blocks.append({
+                    "text": "\n".join(current_lines).strip(),
+                    "location": current_header
+                })
+                
+            if not blocks:
+                blocks = [{"text": full_text, "location": "Full Document"}]
+            return blocks
+    except Exception as e:
+        raise ValueError(f"Failed to read DOCX file: {e}")
+
+def extract_org_text(file_path: str) -> list[dict]:
+    """Extracts text from an Emacs Org-mode file, splitting by headings (* Heading)."""
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception as e:
+        raise ValueError(f"Failed to read ORG file: {e}")
+        
+    lines = content.split('\n')
+    blocks = []
+    current_header = "Intro"
+    current_lines = []
+    
+    import re
+    heading_pattern = re.compile(r'^\*+\s+(.+)$')
+    
+    for line in lines:
+        match = heading_pattern.match(line)
+        if match:
+            if current_lines:
+                blocks.append({
+                    "text": "\n".join(current_lines).strip(),
+                    "location": current_header
+                })
+                current_lines = []
+            current_header = match.group(1).strip()
+        current_lines.append(line)
+        
+    if current_lines:
+        blocks.append({
+            "text": "\n".join(current_lines).strip(),
+            "location": current_header
+        })
+        
+    blocks = [b for b in blocks if b["text"].strip()]
+    if not blocks:
+        blocks = [{"text": content, "location": "Full Document"}]
+    return blocks
+
 def extract_text(file_path: str) -> list[dict]:
     """Extracts text chunks and their locations from a file based on its extension."""
     if not os.path.exists(file_path):
@@ -358,5 +581,11 @@ def extract_text(file_path: str) -> list[dict]:
         return extract_epub_text(file_path)
     elif ext in [".txt", ".md", ".markdown"]:
         return extract_txt_text(file_path)
+    elif ext == ".docx":
+        return extract_docx_text(file_path)
+    elif ext in [".html", ".htm"]:
+        return extract_html_text(file_path)
+    elif ext == ".org":
+        return extract_org_text(file_path)
     else:
         raise ValueError(f"Unsupported file type: {ext}")

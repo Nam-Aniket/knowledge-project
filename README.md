@@ -5,9 +5,9 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Enabled-orange.svg?style=for-the-badge)](https://modelcontextprotocol.io)
 
-Local-first RAG and GraphRAG for Obsidian notes, books, PDFs, and EPUBs — exposed to Claude, Antigravity, Cursor, and other MCP-compatible coding assistants.
+Local-first RAG and GraphRAG for Obsidian notes, books, PDFs, EPUBs, Word DOCX, HTML, and Org-mode files — exposed to Claude, Antigravity, Cursor, and other MCP-compatible coding assistants.
 
-Psyche turns your personal documents into a local searchable knowledge layer. It ingests Obsidian vaults, PDFs, EPUBs, Markdown, and text files; stores chunks, metadata, embeddings, and FTS5 indexes in SQLite; combines keyword and semantic retrieval with Reciprocal Rank Fusion; and exposes retrieval through a CLI, chat shell, and MCP server.
+Psyche turns your personal documents into a local searchable knowledge layer. It ingests Obsidian vaults, PDFs, EPUBs, Word DOCX, HTML, Org-mode, Markdown, and text files; stores chunks, metadata, embeddings, and FTS5 indexes in SQLite; combines keyword and semantic retrieval with Reciprocal Rank Fusion; and exposes retrieval through a CLI, chat shell, and MCP server.
 
 > **“Give your coding assistant access to your books, notes, and project knowledge — locally.”**
 
