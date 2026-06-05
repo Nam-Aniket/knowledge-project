@@ -84,6 +84,14 @@ Search the psyche database for: "$ARGUMENTS"
   fs.writeFileSync(path.join(geminiCommandsDir, 'psyche.toml'), geminiTomlContent, 'utf8');
   console.log('✅ Registered Gemini/Antigravity slash command prompt.');
 
+  // Cursor commands
+  const cursorCommandsDir = path.join(home, '.cursor', 'commands');
+  if (!fs.existsSync(cursorCommandsDir)) {
+    fs.mkdirSync(cursorCommandsDir, { recursive: true });
+  }
+  fs.writeFileSync(path.join(cursorCommandsDir, 'psyche.md'), promptContent, 'utf8');
+  console.log('✅ Registered Cursor slash command prompt.');
+
   // 6. Register MCP configuration in Codex, Gemini/Antigravity, and Claude Desktop
   try {
     const cliPath = path.join(pkgDir, 'bin', 'cli.js');

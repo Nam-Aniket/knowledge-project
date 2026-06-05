@@ -123,6 +123,53 @@ def register_mcp_configs(python_bin, project_root):
     except Exception as e:
         print(f"⚠️ Warning: Could not register in Claude Desktop config: {e}")
 
+def register_slash_prompts(project_root):
+    home = os.path.expanduser("~")
+    prompt_content = """---
+description: Query the Psyche database for your books and notes
+argument-hint: [query]
+---
+Search the psyche database for: "$ARGUMENTS"
+"""
+    
+    # A. Codex prompts
+    try:
+        codex_prompts_dir = os.path.join(home, ".codex", "prompts")
+        os.makedirs(codex_prompts_dir, exist_ok=True)
+        with open(os.path.join(codex_prompts_dir, "psyche.md"), 'w', encoding='utf-8') as f:
+            f.write(prompt_content)
+        print("✅ Registered Codex slash command prompt.")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not register Codex slash command prompt: {e}")
+
+    # B. Gemini commands
+    try:
+        gemini_commands_dir = os.path.join(home, ".gemini", "commands")
+        os.makedirs(gemini_commands_dir, exist_ok=True)
+        with open(os.path.join(gemini_commands_dir, "psyche.md"), 'w', encoding='utf-8') as f:
+            f.write(prompt_content)
+            
+        gemini_toml_content = """description = "Query the Psyche database for your books and notes"
+prompt = \"\"\"
+Search the psyche database for: "$ARGUMENTS"
+\"\"\"
+"""
+        with open(os.path.join(gemini_commands_dir, "psyche.toml"), 'w', encoding='utf-8') as f:
+            f.write(gemini_toml_content)
+        print("✅ Registered Gemini/Antigravity slash command prompt.")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not register Gemini/Antigravity slash command prompt: {e}")
+
+    # C. Cursor commands
+    try:
+        cursor_commands_dir = os.path.join(home, ".cursor", "commands")
+        os.makedirs(cursor_commands_dir, exist_ok=True)
+        with open(os.path.join(cursor_commands_dir, "psyche.md"), 'w', encoding='utf-8') as f:
+            f.write(prompt_content)
+        print("✅ Registered Cursor slash command prompt.")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not register Cursor slash command prompt: {e}")
+
 def run_setup():
     # If PSYCHE_SETUP_WIZARD_ONLY is set, we just run the interactive wizard
     if os.environ.get("PSYCHE_SETUP_WIZARD_ONLY") == "true":
@@ -188,8 +235,10 @@ def run_setup():
                 print(f"⚠️  Could not create symlink at {dst}: {e}")
                 print(f"You can run psyche using: {abs_psyche_bin}")
 
-    # 3.5 Register MCP configuration
-    register_mcp_configs(python_bin, os.path.dirname(os.path.abspath(__file__)))
+    # 3.5 Register MCP configuration and slash prompts
+    project_root_dir = os.path.dirname(os.path.abspath(__file__))
+    register_mcp_configs(python_bin, project_root_dir)
+    register_slash_prompts(project_root_dir)
 
     # 4. Run setup wizard using the virtualenv python to avoid ModuleNotFound errors
     print("\nLaunching Interactive Setup Wizard...")
