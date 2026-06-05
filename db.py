@@ -586,3 +586,46 @@ def check_and_migrate_embeddings(db_path: str, llm):
         conn.rollback()
     finally:
         conn.close()
+        build_or_update_usearch_index(db_path)
+
+def build_or_update_usearch_index(db_path: str):
+    """Rebuilds or updates the corresponding USearch HNSW index file from all SQLite embeddings."""
+    try:
+        from usearch.index import Index
+    except ImportError:
+        return
+        
+    resolved_path = resolve_db_path(db_path)
+    index_path = resolved_path.replace(".db", "") + ".usearch"
+    
+    conn = get_connection(resolved_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT chunk_id, embedding_blob FROM embeddings")
+        rows = cursor.fetchall()
+        if not rows:
+            if os.path.exists(index_path):
+                os.remove(index_path)
+            return
+            
+        import numpy as np
+        chunk_ids = []
+        vectors = []
+        for cid, blob in rows:
+            vec = np.frombuffer(blob, dtype=np.float32)
+            chunk_ids.append(cid)
+            vectors.append(vec)
+            
+        dim = len(vectors[0])
+        index = Index(ndim=dim, metric="cosine")
+        
+        keys_arr = np.array(chunk_ids, dtype=np.int64)
+        vectors_matrix = np.vstack(vectors)
+        index.add(keys_arr, vectors_matrix)
+        index.save(index_path)
+    except Exception as e:
+        import sys
+        sys.stderr.write(f"[Psyche] Warning: Could not update USearch index ({e})\n")
+    finally:
+        conn.close()
+

@@ -99,7 +99,7 @@ def reciprocal_rank_fusion(semantic_results: list[tuple], keyword_results: list,
     combined.sort(key=lambda x: x[1], reverse=True)
     return combined
 
-def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, embeddings_matrix: np.ndarray, llm: LLMClient, limit: int = 30) -> list[tuple[dict, float]]:
+def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, embeddings_matrix: np.ndarray, llm: LLMClient, usearch_index=None, limit: int = 30) -> list[tuple[dict, float]]:
     """Runs semantic and keyword search, combining them via Reciprocal Rank Fusion (RRF)."""
     # 1. Semantic search
     semantic_results = []
@@ -107,15 +107,24 @@ def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, 
         try:
             q_vector = llm.get_embedding(query_text)
             
-            # First attempt: Try SQLite-vec C-level vector search
-            conn = get_connection(db_path)
-            try:
-                semantic_results = search_vector_vec(conn, q_vector, limit=limit)
-            finally:
-                conn.close()
+            # Tier 1: Try USearch index search
+            if usearch_index is not None:
+                try:
+                    q_arr = np.array(q_vector, dtype=np.float32)
+                    matches = usearch_index.search(q_arr, limit)
+                    semantic_results = [(int(k), 1.0 - float(d)) for k, d in zip(matches.keys, matches.distances)]
+                except Exception:
+                    pass
+            
+            # Tier 2: Try SQLite-vec C-level vector search
+            if not semantic_results:
+                conn = get_connection(db_path)
+                try:
+                    semantic_results = search_vector_vec(conn, q_vector, limit=limit)
+                finally:
+                    conn.close()
                 
-            # Fallback: If sqlite-vec returned nothing (extension not loaded or table missing)
-            # but we have in-memory embeddings, use NumPy vectorized search!
+            # Tier 3: Fallback to NumPy vectorized search
             if not semantic_results and embeddings_matrix.size > 0:
                 semantic_results = calculate_similarities_vectorized(q_vector, chunk_ids, embeddings_matrix)
         except Exception as sem_err:
@@ -408,6 +417,20 @@ def main():
     chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
     embeddings_matrix = np.vstack([r["embedding"] for r in records if r["embedding"] is not None]) if len(records) > 0 else np.array([], dtype=np.float32)
         
+    # Load usearch index if available
+    usearch_index = None
+    if llm.provider != "none":
+        try:
+            from usearch.index import Index
+            index_path = db_path.replace(".db", "") + ".usearch"
+            if os.path.exists(index_path):
+                if len(records) > 0 and embeddings_matrix.size > 0:
+                    dim = embeddings_matrix.shape[1]
+                    usearch_index = Index(ndim=dim, metric="cosine")
+                    usearch_index.load(index_path)
+        except Exception:
+            usearch_index = None
+        
     system_instruction = (
         "You are a helpful knowledge assistant. Synthesize a detailed, clear answer based on "
         "the retrieved context chunks below. You must ground your answers strictly in the "
@@ -487,7 +510,7 @@ def main():
             # Perform Hybrid RAG Search
             try:
                 with console.status("[bold cyan]Retrieving context (Hybrid Search)...") as status:
-                    similarities = perform_hybrid_search(db_path, clean_input, chunk_ids, embeddings_matrix, llm, limit=args.top)
+                    similarities = perform_hybrid_search(db_path, clean_input, chunk_ids, embeddings_matrix, llm, usearch_index=usearch_index, limit=args.top)
                     context_str = format_context(similarities, top_n=args.top)
                     
                     # Retrieve concept graph context
@@ -595,7 +618,7 @@ def main():
         
         try:
             with console.status("[bold cyan]Searching database (Hybrid Search)...") as status:
-                similarities = perform_hybrid_search(db_path, query_text, chunk_ids, embeddings_matrix, llm, limit=args.top)
+                similarities = perform_hybrid_search(db_path, query_text, chunk_ids, embeddings_matrix, llm, usearch_index=usearch_index, limit=args.top)
                 context_str = format_context(similarities, top_n=args.top)
                 
                 # Retrieve concept graph context
