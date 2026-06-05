@@ -7,13 +7,7 @@
   [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![Model Context Protocol](https://img.shields.io/badge/MCP-Enabled-orange.svg?style=for-the-badge)](https://modelcontextprotocol.io)
-  [![Smithery Badge](https://api.smithery.ai/metric/psyche)](https://smithery.ai/server/psyche)
   [![GitHub Stars](https://img.shields.io/github/stars/Nam-Aniket/psyche?style=for-the-badge&color=yellow)](https://github.com/Nam-Aniket/psyche/stargazers)
-</div>
-
-<div align="center">
-  <br/>
-  <img src="assets/demo.png" alt="Psyche Terminal Ingest and Query Demo" width="700px" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);"/>
 </div>
 
 ---
