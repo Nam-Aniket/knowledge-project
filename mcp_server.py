@@ -27,6 +27,12 @@ def search_knowledge_tool(query_text, topic=None, top=5):
     import numpy as np
     from db import get_all_embeddings_only
     
+    # Resolve top parameter to int
+    try:
+        top = int(top)
+    except (ValueError, TypeError):
+        top = 5
+        
     # Resolve db path
     db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
     if topic:
@@ -56,7 +62,11 @@ def search_knowledge_tool(query_text, topic=None, top=5):
             conn.close()
             
     chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
-    embeddings_matrix = np.vstack([r["embedding"] for r in records if r["embedding"] is not None]) if len(records) > 0 else np.array([], dtype=np.float32)
+    valid_embeddings = [r["embedding"] for r in records if r["embedding"] is not None]
+    if valid_embeddings:
+        embeddings_matrix = np.vstack(valid_embeddings)
+    else:
+        embeddings_matrix = np.array([], dtype=np.float32)
         
     # Load usearch index if available
     usearch_index = None

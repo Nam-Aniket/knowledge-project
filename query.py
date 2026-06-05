@@ -473,7 +473,11 @@ def main():
             conn.close()
             
     chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
-    embeddings_matrix = np.vstack([r["embedding"] for r in records if r["embedding"] is not None]) if len(records) > 0 else np.array([], dtype=np.float32)
+    valid_embeddings = [r["embedding"] for r in records if r["embedding"] is not None]
+    if valid_embeddings:
+        embeddings_matrix = np.vstack(valid_embeddings)
+    else:
+        embeddings_matrix = np.array([], dtype=np.float32)
         
     # Load usearch index if available
     usearch_index = None

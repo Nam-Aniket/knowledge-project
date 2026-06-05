@@ -3,6 +3,126 @@ import sys
 import subprocess
 import shutil
 
+def register_mcp_configs(python_bin, project_root):
+    import json
+    
+    # We want absolute paths
+    abs_python_bin = os.path.abspath(python_bin)
+    abs_cli_py = os.path.join(os.path.abspath(project_root), "cli.py")
+    
+    mcp_config = {
+        "command": abs_python_bin,
+        "args": ["-u", abs_cli_py, "start-mcp"]
+    }
+    
+    home = os.path.expanduser("~")
+    
+    # Helper to update TOML block in ~/.codex/config.toml
+    def update_toml_block(content, section_name, new_block_dict):
+        lines = content.splitlines()
+        section_index = -1
+        for i, line in enumerate(lines):
+            if line.strip() == f"[{section_name}]":
+                section_index = i
+                break
+                
+        block_lines = [f"[{section_name}]"]
+        for k, v in new_block_dict.items():
+            if isinstance(v, str):
+                block_lines.append(f'{k} = "{v}"')
+            elif isinstance(v, (list, tuple)):
+                block_lines.append(f'{k} = {json.dumps(v)}')
+            elif isinstance(v, bool):
+                block_lines.append(f'{k} = {"true" if v else "false"}')
+            elif isinstance(v, (int, float)):
+                block_lines.append(f'{k} = {v}')
+                
+        if section_index != -1:
+            end_index = len(lines)
+            for i in range(section_index + 1, len(lines)):
+                if lines[i].strip().startswith('['):
+                    end_index = i
+                    break
+            lines[section_index:end_index] = block_lines
+        else:
+            if lines and lines[-1].strip() != '':
+                lines.append('')
+            lines.extend(block_lines)
+            
+        return '\n'.join(lines) + '\n'
+
+    # Helper to update JSON configurations
+    def update_json_config(file_path, mcp_server_name, mcp_config_dict):
+        config = {}
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            except Exception as e:
+                print(f"⚠️ Warning: Could not parse JSON in {file_path}: {e}")
+                
+        if "mcpServers" not in config:
+            config["mcpServers"] = {}
+            
+        config["mcpServers"][mcp_server_name] = mcp_config_dict
+        
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            print(f"⚠️ Warning: Could not write JSON to {file_path}: {e}")
+
+    print("\nRegistering Psyche MCP Server in configurations...")
+    
+    # A. Codex (~/.codex/config.toml)
+    try:
+        codex_config_path = os.path.join(home, ".codex", "config.toml")
+        toml_content = ""
+        if os.path.exists(codex_config_path):
+            try:
+                with open(codex_config_path, 'r', encoding='utf-8') as f:
+                    toml_content = f.read()
+            except Exception:
+                pass
+        else:
+            os.makedirs(os.path.dirname(codex_config_path), exist_ok=True)
+            
+        updated_toml = update_toml_block(toml_content, "mcp_servers.psyche", mcp_config)
+        with open(codex_config_path, 'w', encoding='utf-8') as f:
+            f.write(updated_toml)
+        print("✅ Registered Psyche MCP server in Codex config.")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not register in Codex config: {e}")
+
+    # B. Gemini/Antigravity, Cursor, and Windsurf
+    mcp_json_configs = [
+        {"name": "Gemini (Antigravity)", "path": os.path.join(home, ".gemini", "antigravity", "mcp_config.json")},
+        {"name": "Gemini (Antigravity-IDE)", "path": os.path.join(home, ".gemini", "antigravity-ide", "mcp_config.json")},
+        {"name": "Cursor", "path": os.path.join(home, ".cursor", "mcp.json")},
+        {"name": "Windsurf", "path": os.path.join(home, ".codeium", "windsurf", "mcp_config.json")}
+    ]
+    for item in mcp_json_configs:
+        try:
+            update_json_config(item["path"], "psyche", mcp_config)
+            print(f"✅ Registered Psyche MCP server in {item['name']} config: {item['path']}")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not register in {item['name']} config: {e}")
+
+    # C. Claude Desktop
+    try:
+        if sys.platform == "darwin":
+            claude_config_path = os.path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+        elif sys.platform == "win32":
+            claude_config_path = os.path.join(os.environ.get("APPDATA", ""), "Claude", "claude_desktop_config.json")
+        else:
+            claude_config_path = os.path.join(home, ".config", "Claude", "claude_desktop_config.json")
+            
+        update_json_config(claude_config_path, "psyche", mcp_config)
+        print(f"✅ Registered Psyche MCP server in Claude Desktop config: {claude_config_path}")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not register in Claude Desktop config: {e}")
+
 def run_setup():
     # If PSYCHE_SETUP_WIZARD_ONLY is set, we just run the interactive wizard
     if os.environ.get("PSYCHE_SETUP_WIZARD_ONLY") == "true":
@@ -67,6 +187,9 @@ def run_setup():
             except Exception as e:
                 print(f"⚠️  Could not create symlink at {dst}: {e}")
                 print(f"You can run psyche using: {abs_psyche_bin}")
+
+    # 3.5 Register MCP configuration
+    register_mcp_configs(python_bin, os.path.dirname(os.path.abspath(__file__)))
 
     # 4. Run setup wizard using the virtualenv python to avoid ModuleNotFound errors
     print("\nLaunching Interactive Setup Wizard...")
