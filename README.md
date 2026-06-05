@@ -1,24 +1,86 @@
-# Psyche RAG
+# Psyche 🧠: Local-First RAG & Agentic Memory Layer (MCP Server for Cursor, Claude & Antigravity)
 
-[![Version](https://img.shields.io/badge/version-0.3.4-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
-[![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
-[![Model Context Protocol](https://img.shields.io/badge/MCP-Enabled-orange.svg?style=for-the-badge)](https://modelcontextprotocol.io)
+<div align="center">
+  <p><strong>Give your AI coding assistant (Cursor, Claude Code, Antigravity) 100% local, persistent memory and instant access to your books, notes, and project guidelines.</strong></p>
 
-Local-first RAG and GraphRAG for Obsidian notes, books, PDFs, EPUBs, Word DOCX, HTML, and Org-mode files — exposed to Claude, Antigravity, Cursor, and other MCP-compatible coding assistants.
-
-Psyche turns your personal documents into a local searchable knowledge layer. It ingests Obsidian vaults, PDFs, EPUBs, Word DOCX, HTML, Org-mode, Markdown, and text files; stores chunks, metadata, embeddings, and FTS5 indexes in SQLite; combines keyword and semantic retrieval with Reciprocal Rank Fusion; and exposes retrieval through a CLI, chat shell, and MCP server.
-
-> **“Give your coding assistant access to your books, notes, and project knowledge — locally.”**
+  [![Version](https://img.shields.io/badge/version-0.4.0-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
+  [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
+  [![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
+  [![Model Context Protocol](https://img.shields.io/badge/MCP-Enabled-orange.svg?style=for-the-badge)](https://modelcontextprotocol.io)
+  [![Smithery Badge](https://api.smithery.ai/metric/psyche)](https://smithery.ai/server/psyche)
+  [![GitHub Stars](https://img.shields.io/github/stars/Nam-Aniket/psyche?style=for-the-badge&color=yellow)](https://github.com/Nam-Aniket/psyche/stargazers)
+</div>
 
 ---
 
-## 🏗️ How it Works
+Psyche turns your personal documents and agent interactions into a local, searchable knowledge layer. It ingests Obsidian vaults, PDFs, EPUBs, Word DOCX, HTML, Org-mode, Markdown, and text files; stores chunks, metadata, embeddings, and FTS5 indexes in SQLite; combines keyword and semantic retrieval with Reciprocal Rank Fusion; and exposes retrieval through a CLI, chat shell, and MCP server.
 
-Psyche is built on a direct, local-first retrieval pipeline designed for speed, privacy, and precision:
+Expose your brain database directly to Cursor, Claude Desktop, Antigravity, and other MCP-compatible coding assistants so they can fetch relevant books and notes dynamically and maintain persistent agent memory.
 
-```
-Local docs ──> SQLite + FTS5 + Embeddings ──> Hybrid Retrieval ──> MCP Server ──> Coding Assistant
+---
+
+## 🧠 Stateful Agent Memory (Letta/MemGPT Hierarchy)
+
+Unlike static document-search tools, Psyche provides a full **Stateful Agentic Memory Layer** directly to your AI assistants via the Model Context Protocol (MCP):
+
+1. **Document Knowledge (Archival RAG)**: Hybrid FTS5 (BM25) and vector search over your books, markdown files, and Obsidian vaults (`search_knowledge`).
+2. **Core Memory (RAM)**: Key-value facts and project guidelines (e.g. coding preferences, styling choices, naming rules) that the agent writes and reads dynamically (`write_memory_core`).
+3. **Archival Memory (Disk)**: Vector-embedded logs, learnings, and debugging context that the agent archives for long-term reference (`append_memory_archival`).
+4. **Interaction History (Recall)**: Stateful logging of conversation turns to ensure context persistence across assistant sessions (`record_interaction`).
+
+---
+
+## ⚡ Why Psyche? (Comparison)
+
+| Before Psyche | With Psyche |
+| :--- | :--- |
+| Copy-pasting chapters or files manually into LLM chat boxes | Expose your entire local library/vault directly via MCP |
+| Uploading private notes to cloud AI providers, risking data leaks | **100% local-first** embeddings, indexing, and reranking |
+| Cluttering LLM context windows with large, noisy documents | Hybrid retrieval + RRF + Cross-Encoder reranking |
+| Sluggish search over raw text files | Sub-millisecond ANN local vector indexing |
+| Assistant forgets custom style guides or project rules in new chats | Agent writes core rules via `write_memory_core` which persist indefinitely |
+
+---
+
+## 🏗️ How it Works (System Architecture)
+
+```mermaid
+flowchart TD
+    subgraph Local ["1. Local Documents"]
+        obsidian["Obsidian Vaults (.md)"]
+        books["Books (PDF, EPUB, DOCX)"]
+        docs["Org-mode & Plain Text"]
+    end
+
+    subgraph Process ["2. Ingest & Index"]
+        ingest["psyche ingest"]
+        clean["Wikilink Cleaner & Frontmatter Stripper"]
+        chunk["Location-Aware Chunking"]
+        sqlite[("SQLite DB (Metadata)")]
+        fts5["FTS5 (Keyword Index)"]
+        sqlite_vec["sqlite-vec (Vector Index)"]
+        usearch["usearch (HNSW Index)"]
+    end
+
+    subgraph Retrieve ["3. Hybrid Search & Rerank"]
+        query["Hybrid Query"]
+        rrf["Reciprocal Rank Fusion (RRF)"]
+        flashrank["flashrank ONNX Reranker (Offline)"]
+    end
+
+    subgraph Serve ["4. AI Assistants (MCP)"]
+        mcp["MCP JSON-RPC Server"]
+        cli["Interactive REPL Chat"]
+        editor["Cursor / Claude Desktop / Antigravity"]
+    end
+
+    Local --> ingest
+    ingest --> clean --> chunk
+    chunk --> sqlite & fts5 & sqlite_vec & usearch
+    sqlite & fts5 & sqlite_vec & usearch --> query
+    query --> rrf --> flashrank
+    flashrank --> mcp & cli
+    mcp --> editor
 ```
 
 1. **Ingest**: Point Psyche at directories of markdown files or books. It parses them locally.
@@ -36,7 +98,7 @@ Local docs ──> SQLite + FTS5 + Embeddings ──> Hybrid Retrieval ──> M
 *   🕸️ **High-Performance Hybrid Search**: Rerank keyword hits and semantic vector matches using **Reciprocal Rank Fusion (RRF)** and post-rerank with a local ONNX cross-encoder.
 *   🔌 **Model Context Protocol (MCP)**: Directly expose your books and notes to LLMs in the background. Assistants can query your brain database dynamically.
 *   📓 **Obsidian Note Sync**: Automatically strips YAML frontmatter, extracts markdown tags as keywords, prunes system directories (`.obsidian`, `.trash`), and cleans wikilinks (`[[Concept|Display]]` -> `Display`).
-*   🔮 **Optional GraphRAG Concept Map**: Semantic K-Means clustering and proper-noun co-occurrence extraction builder mapping links and definitions across your corpus (optional feature).
+*   🔮 **Optional GraphRAG Concept Map**: Semantic K-Means clustering and proper-noun co-occurrence extraction builder mapping links and definitions across your corpus.
 *   🛡️ **100% Local / Offline-First**: Run entirely local embeddings and chat using Ollama (`llama3` + `nomic-embed-text`) or local ONNX models. Fall back to pure-retrieval rich terminal views if no AI provider is configured.
 
 ---
@@ -165,7 +227,14 @@ might consider suicide before the quality of life declines...
 
 ## 🔌 Integrating with Antigravity / Claude / Cursor
 
-To expose your books and notes database directly to coding assistants, add the following configuration block to your MCP host configuration file (e.g., `~/Library/Application Support/Claude/claude_desktop_config.json`):
+### 🛠️ Automatic Installation via Smithery.ai
+To install and configure Psyche for Claude Desktop automatically, simply run:
+```bash
+npx -y @smithery/cli install psyche --client claude
+```
+
+### ⚙️ Manual Configuration
+To expose your books and notes database directly to coding assistants manually, add the following configuration block to your MCP host configuration file (e.g., `~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 {
@@ -192,8 +261,32 @@ You can use it directly in your chat:
 
 ---
 
+## 💬 FAQ
+
+### **Does any of my data leave my machine?**
+No. Psyche runs **100% locally**. Vectors are computed locally via ONNX runtime (`fastembed`) or Ollama. Chunk metadata is indexed locally in a SQLite database, and the final candidates are re-scored locally on CPU using an ONNX cross-encoder. 
+
+### **How does the hybrid search work?**
+It uses **Reciprocal Rank Fusion (RRF)** to combine lexical search results from SQLite's built-in FTS5 engine (using BM25 scoring) with vector search results. The combined top results are then reranked using a local, lightweight Cross-Encoder (`flashrank`'s `ms-marco-TinyBERT-L-2-v2`) to provide the highest-accuracy context to your LLM.
+
+### **How do I connect this to Cursor?**
+Open Cursor Settings -> Features -> MCP, click **+ Add New MCP Server**, and enter:
+- **Name:** `psyche`
+- **Type:** `command`
+- **Command:** `npx -y psyche start-mcp`
+
+### **How do I build the optional GraphRAG concept maps?**
+Run `psyche build-graph`. This clusters vectors using K-Means and extracts statistical co-occurrences of proper nouns to build a semantic concept network of your notes.
+
+---
+
 ## 🧪 Running Tests
 Verify database connections, FTS5 parsers, and similarity algorithms:
 ```bash
 .venv/bin/python -m unittest discover tests
 ```
+
+---
+
+## ⭐ Support the Project
+If you find Psyche useful for giving your AI coding assistants a local brain, please consider starring the repository! It helps other developers discover the project and supports local-first, privacy-focused developer tooling.

@@ -45,6 +45,8 @@ def search_knowledge_tool(query_text, topic=None, top=5):
         # Initialize LLM Client
         llm = LLMClient()
         check_and_migrate_embeddings(db_path, llm)
+        from db import sync_memories_hook
+        sync_memories_hook(db_path)
     except Exception as e:
         log(f"Failed to initialize LLM or migrate database: {e}. Falling back to offline mode.")
         class FakeLLM:
@@ -154,6 +156,89 @@ def retrieve_graph_tool(topic=None):
             output += f"- {src} --({rel})--> {tgt}{desc_str}\n"
             
     return output
+
+def record_interaction_tool(session_id: str, role: str, content: str, tool_calls: str = None, topic: str = None):
+    from datetime import datetime, timezone
+    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
+    if topic:
+        db_path = resolve_db_path(f"topic_{topic}.db")
+        
+    conn = get_connection(db_path)
+    try:
+        cursor = conn.cursor()
+        created_at = datetime.now(timezone.utc).isoformat()
+        cursor.execute("""
+            INSERT INTO memory_recall (session_id, role, content, tool_calls, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (session_id, role, content, tool_calls, created_at))
+        conn.commit()
+        return f"Successfully recorded interaction for session '{session_id}'."
+    except Exception as e:
+        return f"Error recording interaction: {e}"
+    finally:
+        conn.close()
+
+def write_memory_core_tool(key: str, value: str, category: str = "general", topic: str = None):
+    from datetime import datetime, timezone
+    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
+    if topic:
+        db_path = resolve_db_path(f"topic_{topic}.db")
+        
+    conn = get_connection(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO memory_core (key, value, category, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                category = COALESCE(excluded.category, category),
+                updated_at = excluded.updated_at
+        """, (key, value, category, datetime.now(timezone.utc).isoformat()))
+        conn.commit()
+        return f"Core memory updated successfully: {key} -> '{value}'"
+    except Exception as e:
+        return f"Error writing core memory: {e}"
+    finally:
+        conn.close()
+
+def append_memory_archival_tool(text: str, topic: str = None, author: str = "Assistant"):
+    from datetime import datetime, timezone
+    from db import add_source, add_chunk, add_embedding, update_usearch_index_incrementally
+    
+    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
+    if topic:
+        db_path = resolve_db_path(f"topic_{topic}.db")
+        
+    conn = get_connection(db_path)
+    try:
+        llm = LLMClient()
+        if llm.provider == "none":
+            return "Error: Cannot write archival memory while running in AI-Free mode."
+            
+        vector = llm.get_embedding(text)
+        
+        # Add source, chunk and embedding
+        checksum = f"dynamic_{hash(text)}_{datetime.now(timezone.utc).timestamp()}"
+        source_id = add_source(conn, f"Dynamic Agent Memory ({topic or 'default'})", author, "dynamic_memory", checksum)
+        chunk_id = add_chunk(conn, source_id, 0, text, location="dynamic_memory_mcp")
+        add_embedding(conn, chunk_id, vector)
+        
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO memory_archival (chunk_id, created_at)
+            VALUES (?, ?)
+        """, (chunk_id, datetime.now(timezone.utc).isoformat()))
+        conn.commit()
+        
+        # Incremental HNSW update
+        update_usearch_index_incrementally(db_path, chunk_id, vector)
+        
+        return f"Successfully saved to archival memory (Chunk ID: {chunk_id})."
+    except Exception as e:
+        return f"Error writing archival memory: {e}"
+    finally:
+        conn.close()
 
 def main():
     log("Server starting on stdio transport...")
@@ -300,6 +385,86 @@ def main():
                                     }
                                 }
                             }
+                        },
+                        {
+                            "name": "record_interaction",
+                            "description": "Log a conversation message (user query, assistant response, or tool execution) into persistent session memory.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "session_id": {
+                                        "type": "string",
+                                        "description": "Unique session identifier for the conversation"
+                                    },
+                                    "role": {
+                                        "type": "string",
+                                        "description": "Role of the message author ('user', 'assistant', 'system', 'tool')"
+                                    },
+                                    "content": {
+                                        "type": "string",
+                                        "description": "Message content"
+                                    },
+                                    "tool_calls": {
+                                        "type": "string",
+                                        "description": "Optional JSON string representing tool calls executed"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name. If omitted, uses the default database."
+                                    }
+                                },
+                                "required": ["session_id", "role", "content"]
+                            }
+                        },
+                        {
+                            "name": "write_memory_core",
+                            "description": "Save or update a key-value fact or rule in the agent's core working memory (e.g. user preferences or project guidelines).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "key": {
+                                        "type": "string",
+                                        "description": "The unique key identifying this memory/rule (e.g., 'naming_convention')"
+                                    },
+                                    "value": {
+                                        "type": "string",
+                                        "description": "The description/value of the fact or rule"
+                                    },
+                                    "category": {
+                                        "type": "string",
+                                        "description": "Optional category (e.g., 'user_preferences', 'project_guidelines', 'active_task')",
+                                        "default": "general"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name. If omitted, uses the default database."
+                                    }
+                                },
+                                "required": ["key", "value"]
+                            }
+                        },
+                        {
+                            "name": "append_memory_archival",
+                            "description": "Vector-embed and write a new learning, fact, or debugging log to long-term RAG search memory.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string",
+                                        "description": "The learning content or lesson to archive"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name. If omitted, uses the default database."
+                                    },
+                                    "author": {
+                                        "type": "string",
+                                        "description": "Optional author name",
+                                        "default": "Assistant"
+                                    }
+                                },
+                                "required": ["text"]
+                            }
                         }
                     ]
                 }
@@ -325,6 +490,48 @@ def main():
                 elif tool_name == "retrieve_graph":
                     topic = arguments.get("topic")
                     text_result = retrieve_graph_tool(topic)
+                    resp["result"] = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": text_result
+                            }
+                        ]
+                    }
+                elif tool_name == "record_interaction":
+                    session_id = arguments.get("session_id")
+                    role = arguments.get("role")
+                    content = arguments.get("content")
+                    tool_calls = arguments.get("tool_calls")
+                    topic = arguments.get("topic")
+                    text_result = record_interaction_tool(session_id, role, content, tool_calls, topic)
+                    resp["result"] = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": text_result
+                            }
+                        ]
+                    }
+                elif tool_name == "write_memory_core":
+                    key = arguments.get("key")
+                    value = arguments.get("value")
+                    category = arguments.get("category", "general")
+                    topic = arguments.get("topic")
+                    text_result = write_memory_core_tool(key, value, category, topic)
+                    resp["result"] = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": text_result
+                            }
+                        ]
+                    }
+                elif tool_name == "append_memory_archival":
+                    text = arguments.get("text")
+                    topic = arguments.get("topic")
+                    author = arguments.get("author", "Assistant")
+                    text_result = append_memory_archival_tool(text, topic, author)
                     resp["result"] = {
                         "content": [
                             {

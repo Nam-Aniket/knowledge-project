@@ -1,7 +1,7 @@
 {
   "name": "psyche",
-  "version": "0.3.5",
-  "description": "High-performance GraphRAG and MCP engine for books and Obsidian notes",
+  "version": "0.4.0",
+  "description": "Local-first RAG and Model Context Protocol (MCP) memory layer for coding assistants (Cursor, Claude Desktop, Antigravity) with SQLite hybrid search and local reranking.",
   "main": "bin/cli.js",
   "bin": {
     "psyche": "./bin/cli.js"
@@ -32,7 +32,18 @@
     "openai",
     "epub-parser",
     "llm",
-    "lightweight-rag"
+    "lightweight-rag",
+    "cursor-mcp",
+    "claude-desktop-mcp",
+    "sqlite-vec",
+    "hybrid-search",
+    "reranking",
+    "flashrank",
+    "agentic-memory",
+    "letta",
+    "memgpt",
+    "persistent-memory",
+    "developer-tools"
   ],
   "author": "Nam-Aniket",
   "license": "MIT",

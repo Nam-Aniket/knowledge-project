@@ -107,6 +107,38 @@ def init_db(db_path: str):
         )
     """)
     
+    # Create memory_core table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memory_core (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            category TEXT DEFAULT 'general',
+            updated_at TEXT NOT NULL
+        )
+    """)
+    
+    # Create memory_recall table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memory_recall (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            tool_calls TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    
+    # Create memory_archival table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memory_archival (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chunk_id INTEGER UNIQUE NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (chunk_id) REFERENCES chunks (id) ON DELETE CASCADE
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -466,6 +498,7 @@ def check_and_migrate_embeddings(db_path: str, llm):
     if not os.path.exists(resolved_path):
         return
 
+    init_db(resolved_path)
     conn = get_connection(resolved_path)
     try:
         # Ensure metadata table exists
@@ -628,4 +661,85 @@ def build_or_update_usearch_index(db_path: str):
         sys.stderr.write(f"[Psyche] Warning: Could not update USearch index ({e})\n")
     finally:
         conn.close()
+
+def update_usearch_index_incrementally(db_path: str, chunk_id: int, vector: list[float]):
+    """Dynamically appends a vector to the USearch index without rebuilding from scratch."""
+    try:
+        from usearch.index import Index
+    except ImportError:
+        return
+        
+    resolved_path = resolve_db_path(db_path)
+    index_path = resolved_path.replace(".db", "") + ".usearch"
+    dim = len(vector)
+    
+    index = Index(ndim=dim, metric="cosine")
+    
+    # If index exists, load existing keys/vectors
+    if os.path.exists(index_path):
+        try:
+            index.load(index_path)
+        except Exception as e:
+            import sys
+            sys.stderr.write(f"[Psyche] Failed to load index for update. Re-initializing: {e}\n")
+            
+    # Add new key and vector
+    keys_arr = np.array([chunk_id], dtype=np.int64)
+    vectors_matrix = np.array([vector], dtype=np.float32)
+    if len(vectors_matrix.shape) == 1:
+        vectors_matrix = np.expand_dims(vectors_matrix, axis=0)
+        
+    index.add(keys_arr, vectors_matrix)
+    
+    # Save back to disk
+    index.save(index_path)
+
+def sync_memories_hook(db_path: str):
+    """Scans ~/.psyche/memories/ and programmatically runs ingest on it if new memories exist."""
+    try:
+        memories_dir = os.path.expanduser("~/.psyche/memories")
+        if not os.path.exists(memories_dir):
+            return
+            
+        # Get list of md files
+        files = [os.path.join(memories_dir, f) for f in os.listdir(memories_dir) if f.endswith(".md")]
+        if not files:
+            return
+            
+        # Check if there's any file that hasn't been ingested yet by verifying checksums in the database
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.cursor()
+            import hashlib
+            has_unindexed = False
+            for fpath in files:
+                sha256_hash = hashlib.sha256()
+                with open(fpath, "rb") as f:
+                    for byte_block in iter(lambda: f.read(4096), b""):
+                        sha256_hash.update(byte_block)
+                checksum = sha256_hash.hexdigest()
+                
+                cursor.execute("SELECT id FROM sources WHERE checksum = ?", (checksum,))
+                if not cursor.fetchone():
+                    has_unindexed = True
+                    break
+        finally:
+            conn.close()
+            
+        if not has_unindexed:
+            return
+            
+        # Run ingest.py
+        import subprocess
+        import sys
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        ingest_script = os.path.join(current_dir, "ingest.py")
+        subprocess.run(
+            [sys.executable, ingest_script, memories_dir, "--db-path", db_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        pass
+
 
