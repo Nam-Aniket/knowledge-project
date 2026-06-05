@@ -16,7 +16,7 @@ const cliScript = path.join(pkgDir, 'cli.py');
 
 if (!fs.existsSync(pythonBin)) {
   console.error('❌ Psyche execution environment is corrupted (virtual environment missing).');
-  console.error('Please run: npm rebuild psyche-rag');
+  console.error('Please run: npm rebuild psyche');
   process.exit(1);
 }
 

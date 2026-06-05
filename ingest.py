@@ -12,7 +12,7 @@ from rich.table import Table
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import init_db, get_connection, check_checksum, add_source, add_chunk, add_embedding, resolve_db_path, check_and_migrate_embeddings
+from db import init_db, get_connection, check_checksum, add_source, add_chunk, add_embedding, resolve_db_path, check_and_migrate_embeddings, build_or_update_usearch_index
 from parsers import extract_text
 from llm_client import LLMClient
 
@@ -220,6 +220,7 @@ def main():
             conn.rollback()
             
     conn.close()
+    build_or_update_usearch_index(db_path)
     
     # Sync Summary Table
     console.print("\n[bold green]🔄 Ingestion Sync Summary[/bold green]")

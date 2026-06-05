@@ -111,11 +111,21 @@ def init_db(db_path: str):
     conn.close()
 
 def get_connection(db_path: str) -> sqlite3.Connection:
-    """Returns a connection to the SQLite database."""
+    """Returns a connection to the SQLite database with sqlite-vec loaded if available."""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    
+    # Try to load sqlite-vec dynamically
+    try:
+        import sqlite_vec
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+    except Exception:
+        pass
+        
     return conn
+
 
 def check_checksum(conn: sqlite3.Connection, checksum: str) -> int | None:
     """Checks if a file with the given checksum has already been ingested.
@@ -153,7 +163,7 @@ def add_chunk(conn: sqlite3.Connection, source_id: int, chunk_index: int, text: 
     return chunk_id
 
 def add_embedding(conn: sqlite3.Connection, chunk_id: int, embedding: list[float] | np.ndarray):
-    """Serializes and adds an embedding vector for a specific chunk."""
+    """Serializes and adds an embedding vector for a specific chunk, writing to sqlite-vec if available."""
     cursor = conn.cursor()
     # Convert embedding list/array to float32 binary representation
     vector_arr = np.array(embedding, dtype=np.float32)
@@ -163,6 +173,44 @@ def add_embedding(conn: sqlite3.Connection, chunk_id: int, embedding: list[float
         (chunk_id, blob)
     )
     conn.commit()
+    
+    # Try to write to sqlite-vec virtual table
+    try:
+        dim = len(vector_arr)
+        cursor.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(chunk_id INTEGER PRIMARY KEY, embedding FLOAT[{dim}] distance_metric=cosine)")
+        cursor.execute(
+            "INSERT OR REPLACE INTO vec_chunks (chunk_id, embedding) VALUES (?, ?)",
+            (chunk_id, blob)
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+def search_vector_vec(conn: sqlite3.Connection, query_vector: list[float] | np.ndarray, limit: int = 20) -> list[tuple[int, float]]:
+    """Performs vector search using sqlite-vec if the vec_chunks virtual table exists."""
+    cursor = conn.cursor()
+    # Check if vec_chunks exists
+    try:
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='vec_chunks'")
+        if not cursor.fetchone():
+            return []
+            
+        vec_arr = np.array(query_vector, dtype=np.float32)
+        blob = vec_arr.tobytes()
+        
+        # sqlite-vec MATCH query returns distance. For cosine distance, similarity = 1 - distance
+        cursor.execute("""
+            SELECT 
+                chunk_id, 
+                distance
+            FROM vec_chunks
+            WHERE embedding MATCH ? AND k = ?
+        """, (blob, limit))
+        rows = cursor.fetchall()
+        return [(int(row[0]), 1.0 - float(row[1])) for row in rows]
+    except sqlite3.OperationalError:
+        return []
+
 
 def get_all_embeddings_with_chunks(conn: sqlite3.Connection) -> list[dict]:
     """Retrieves all chunk texts, locations, and deserializes their corresponding embeddings."""
@@ -194,11 +242,99 @@ def get_all_embeddings_with_chunks(conn: sqlite3.Connection) -> list[dict]:
         })
     return results
 
-def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> list[dict]:
-    """Searches the FTS5 virtual table for keyword matches and returns the original chunk records."""
+def get_all_embeddings_only(conn: sqlite3.Connection) -> list[dict]:
+    """Retrieves only chunk IDs and their corresponding deserialized embeddings."""
     cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 
+            chunk_id, 
+            embedding_blob 
+        FROM embeddings
+    """)
+    rows = cursor.fetchall()
+    
+    results = []
+    for chunk_id, blob in rows:
+        embedding = np.frombuffer(blob, dtype=np.float32) if blob is not None else None
+        results.append({
+            "chunk_id": chunk_id,
+            "embedding": embedding
+        })
+    return results
+
+def get_chunks_by_ids(conn: sqlite3.Connection, chunk_ids: list[int]) -> list[dict]:
+    """Retrieves detailed records (text, location, source info) for a specific list of chunk IDs, maintaining input order."""
+    if not chunk_ids:
+        return []
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in chunk_ids)
+    cursor.execute(f"""
+        SELECT 
+            c.id, 
+            c.text, 
+            c.location,
+            s.title, 
+            s.author
+        FROM chunks c
+        JOIN sources s ON c.source_id = s.id
+        WHERE c.id IN ({placeholders})
+    """, chunk_ids)
+    rows = cursor.fetchall()
+    
+    records_map = {}
+    for cid, text, location, source_title, source_author in rows:
+        records_map[cid] = {
+            "chunk_id": cid,
+            "text": text,
+            "location": location,
+            "source_title": source_title,
+            "source_author": source_author
+        }
+        
+    results = []
+    for cid in chunk_ids:
+        if cid in records_map:
+            results.append(records_map[cid])
+    return results
+
+
+def search_fts_ids(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> list[tuple[int, float]]:
+    """Searches the FTS5 virtual table for keyword matches and returns only chunk IDs and BM25 scores."""
+    cursor = conn.cursor()
+    # Sanitize search term to prevent syntax errors in MATCH (e.g. trailing wildcards, special characters)
+    # FTS5 queries should be clean alphanumeric or quoted phrases.
+    clean_query = query_text.replace("'", " ").replace('"', ' ').strip()
+    if not clean_query:
+        return []
     try:
-        # FTS5 Match query
+        cursor.execute("""
+            SELECT 
+                chunk_id, 
+                bm25(chunks_fts) AS score
+            FROM chunks_fts
+            WHERE chunks_fts MATCH ?
+            ORDER BY score ASC
+            LIMIT ?
+        """, (clean_query, limit))
+        rows = cursor.fetchall()
+        return [(int(row[0]), float(row[1])) for row in rows]
+    except sqlite3.OperationalError:
+        cursor.execute("""
+            SELECT id 
+            FROM chunks
+            WHERE text LIKE ?
+            LIMIT ?
+        """, (f"%{query_text}%", limit))
+        rows = cursor.fetchall()
+        return [(int(row[0]), 0.0) for row in rows]
+
+def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> list[dict]:
+    """Searches the FTS5 virtual table for keyword matches and returns the original chunk records, ordered by BM25."""
+    cursor = conn.cursor()
+    clean_query = query_text.replace("'", " ").replace('"', ' ').strip()
+    if not clean_query:
+        return []
+    try:
         cursor.execute("""
             SELECT 
                 c.id, 
@@ -212,11 +348,11 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
             JOIN sources s ON c.source_id = s.id
             LEFT JOIN embeddings e ON e.chunk_id = c.id
             WHERE chunks_fts MATCH ?
+            ORDER BY bm25(chunks_fts) ASC
             LIMIT ?
-        """, (query_text, limit))
+        """, (clean_query, limit))
         rows = cursor.fetchall()
     except sqlite3.OperationalError:
-        # Fallback to simple LIKE search if query syntax is not supported by FTS MATCH
         cursor.execute("""
             SELECT 
                 c.id, 
@@ -245,6 +381,7 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
             "embedding": embedding
         })
     return results
+
 
 def add_concept(conn: sqlite3.Connection, name: str, definition: str | None = None, category: str | None = None) -> int:
     """Inserts a concept if it doesn't exist, or updates its definition and category. Returns concept ID."""
@@ -380,6 +517,10 @@ def check_and_migrate_embeddings(db_path: str, llm):
         if config_model == "none":
             console.print("[yellow]AI-Free mode configured. Clearing existing database embeddings...[/yellow]")
             cursor.execute("DELETE FROM embeddings")
+            try:
+                cursor.execute("DROP TABLE IF EXISTS vec_chunks")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
             set_metadata(conn, "embed_model", "none")
             console.print("[green]✨ Database embeddings cleared successfully.[/green]\n")
@@ -406,9 +547,20 @@ def check_and_migrate_embeddings(db_path: str, llm):
 
         # Clear old embeddings and save new ones
         cursor.execute("DELETE FROM embeddings")
+        try:
+            cursor.execute("DROP TABLE IF EXISTS vec_chunks")
+        except sqlite3.OperationalError:
+            pass
         
         # We can insert using add_embedding logic but inline for efficiency
         import numpy as np
+        dim = len(embeddings[0]) if len(embeddings) > 0 else 0
+        if dim > 0:
+            try:
+                cursor.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(chunk_id INTEGER PRIMARY KEY, embedding FLOAT[{dim}] distance_metric=cosine)")
+            except sqlite3.OperationalError:
+                pass
+                
         for cid, emb in zip(chunk_ids, embeddings):
             vector_arr = np.array(emb, dtype=np.float32)
             blob = vector_arr.tobytes()
@@ -416,6 +568,13 @@ def check_and_migrate_embeddings(db_path: str, llm):
                 "INSERT INTO embeddings (chunk_id, embedding_blob) VALUES (?, ?)",
                 (cid, blob)
             )
+            try:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO vec_chunks (chunk_id, embedding) VALUES (?, ?)",
+                    (cid, blob)
+                )
+            except sqlite3.OperationalError:
+                pass
         
         set_metadata(conn, "embed_model", config_model)
         conn.commit()
@@ -427,3 +586,46 @@ def check_and_migrate_embeddings(db_path: str, llm):
         conn.rollback()
     finally:
         conn.close()
+        build_or_update_usearch_index(db_path)
+
+def build_or_update_usearch_index(db_path: str):
+    """Rebuilds or updates the corresponding USearch HNSW index file from all SQLite embeddings."""
+    try:
+        from usearch.index import Index
+    except ImportError:
+        return
+        
+    resolved_path = resolve_db_path(db_path)
+    index_path = resolved_path.replace(".db", "") + ".usearch"
+    
+    conn = get_connection(resolved_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT chunk_id, embedding_blob FROM embeddings")
+        rows = cursor.fetchall()
+        if not rows:
+            if os.path.exists(index_path):
+                os.remove(index_path)
+            return
+            
+        import numpy as np
+        chunk_ids = []
+        vectors = []
+        for cid, blob in rows:
+            vec = np.frombuffer(blob, dtype=np.float32)
+            chunk_ids.append(cid)
+            vectors.append(vec)
+            
+        dim = len(vectors[0])
+        index = Index(ndim=dim, metric="cosine")
+        
+        keys_arr = np.array(chunk_ids, dtype=np.int64)
+        vectors_matrix = np.vstack(vectors)
+        index.add(keys_arr, vectors_matrix)
+        index.save(index_path)
+    except Exception as e:
+        import sys
+        sys.stderr.write(f"[Psyche] Warning: Could not update USearch index ({e})\n")
+    finally:
+        conn.close()
+

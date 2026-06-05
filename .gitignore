@@ -20,3 +20,7 @@ Thumbs.db
 build/
 dist/
 scratch/
+
+# Database files
+*.db
+*.usearch
