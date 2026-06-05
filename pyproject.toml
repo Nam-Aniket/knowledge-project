@@ -4,9 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psyche"
-version = "0.3.5"
-description = "A lightweight, high-performance GraphRAG CLI engine for books and notes"
+version = "0.4.0"
+description = "Local-first RAG and Model Context Protocol (MCP) memory layer for coding assistants (Cursor, Claude, Antigravity) with SQLite hybrid search and cross-encoder reranking"
 readme = "README.md"
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "cursor-mcp",
+    "claude-mcp",
+    "local-first",
+    "rag",
+    "sqlite-vec",
+    "hybrid-search",
+    "reranker",
+    "persistent-memory",
+    "agentic-memory",
+    "obsidian-notes",
+    "second-brain"
+]
 authors = [
     { name = "Nam-Aniket" }
 ]

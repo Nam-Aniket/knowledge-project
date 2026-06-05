@@ -410,6 +410,8 @@ def main():
         
     # Check and run database embedding migrations if LLM config changed
     check_and_migrate_embeddings(db_path, llm)
+    from db import sync_memories_hook
+    sync_memories_hook(db_path)
         
     # Verify that database has chunks (check if empty)
     conn = get_connection(db_path)

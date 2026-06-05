@@ -24,3 +24,19 @@ scratch/
 # Database files
 *.db
 *.usearch
+
+# Media and screen recordings
+*.webm
+*.mp4
+*.mov
+*.gif
+
+# Growth and Marketing plans
+github_growth_analysis.md
+implementation_plan.md
+launch_assets.md
+demo_video_plan.md
+task.md
+walkthrough.md
+
+

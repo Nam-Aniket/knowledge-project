@@ -54,6 +54,10 @@ def main():
     elif subcommand == "build-graph":
         import build_graph
         build_graph.main()
+    elif subcommand == "compact-memory":
+        import synthesis
+        db_path = os.getenv("DATABASE_PATH")
+        synthesis.compile_daily_logs(db_path_arg=db_path)
     elif subcommand == "start-mcp":
         try:
             import mcp_server
@@ -63,7 +67,7 @@ def main():
             sys.exit(1)
     else:
         print(f"Unknown command: {subcommand}")
-        print("Available commands: setup, ingest, query, chat, build-graph, start-mcp")
+        print("Available commands: setup, ingest, query, chat, build-graph, compact-memory, start-mcp")
         sys.exit(1)
 
 if __name__ == "__main__":
