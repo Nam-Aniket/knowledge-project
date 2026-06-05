@@ -91,7 +91,7 @@ def main():
     if args.ext:
         allowed_exts = {f".{ext.strip().lower().lstrip('.')}" for ext in args.ext.split(',')}
     else:
-        allowed_exts = {".pdf", ".epub", ".txt", ".md", ".markdown"}
+        allowed_exts = {".pdf", ".epub", ".txt", ".md", ".markdown", ".docx", ".html", ".htm", ".org"}
         
     files_to_ingest = []
     for rp in raw_paths:

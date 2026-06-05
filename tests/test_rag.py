@@ -142,6 +142,75 @@ class TestRAGParsers(unittest.TestCase):
         _, tags2 = parse_obsidian_markdown(content2)
         self.assertEqual(tags2, ["stoicism", "discipline"])
 
+    def test_docx_parser(self):
+        import zipfile
+        fd, path = tempfile.mkstemp(suffix=".docx")
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(path, 'w') as docx:
+                xml_content = (
+                    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">\n'
+                    '<w:body>\n'
+                    '<w:p><w:r><w:t>Introduction</w:t></w:r></w:p>\n'
+                    '<w:p><w:r><w:t>This is a docx test content.</w:t></w:r></w:p>\n'
+                    '</w:body>\n'
+                    '</w:document>'
+                )
+                docx.writestr('word/document.xml', xml_content)
+                
+            blocks = parsers.extract_text(path)
+            self.assertEqual(len(blocks), 1)
+            self.assertEqual(blocks[0]["location"], "Introduction")
+            self.assertEqual(blocks[0]["text"].strip(), "This is a docx test content.")
+        finally:
+            os.unlink(path)
+
+    def test_org_parser(self):
+        fd, path = tempfile.mkstemp(suffix=".org")
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(
+                    "* Section One\n"
+                    "This is some text in section one.\n"
+                    "** Subsection\n"
+                    "More text.\n"
+                )
+            blocks = parsers.extract_text(path)
+            self.assertEqual(len(blocks), 2)
+            self.assertEqual(blocks[0]["location"], "Section One")
+            self.assertIn("This is some text in section one.", blocks[0]["text"])
+            self.assertEqual(blocks[1]["location"], "Subsection")
+            self.assertIn("More text.", blocks[1]["text"])
+        finally:
+            os.unlink(path)
+
+    def test_html_parser(self):
+        fd, path = tempfile.mkstemp(suffix=".html")
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(
+                    "<html>\n"
+                    "<head><title>Test Title</title></head>\n"
+                    "<body>\n"
+                    "<h1>Header 1</h1>\n"
+                    "<p>This is paragraph text.</p>\n"
+                    "<h2>Header 2</h2>\n"
+                    "<p>Paragraph two content.</p>\n"
+                    "</body>\n"
+                    "</html>\n"
+                )
+            blocks = parsers.extract_text(path)
+            self.assertEqual(len(blocks), 2)
+            self.assertEqual(blocks[0]["location"], "Header 1")
+            self.assertIn("This is paragraph text.", blocks[0]["text"])
+            self.assertEqual(blocks[1]["location"], "Header 2")
+            self.assertIn("Paragraph two content.", blocks[1]["text"])
+        finally:
+            os.unlink(path)
+
 class TestRAGTextChunking(unittest.TestCase):
     def test_chunk_text(self):
         # Provide a longer text to make sure the chunks generated are longer than 50 characters

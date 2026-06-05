@@ -2,6 +2,14 @@
 
 All notable changes to the **Psyche** project will be documented in this file.
 
+## [0.3.5] - 2026-06-05
+
+### Added
+- **New Document Parsers**: Added native support for parsing **Word DOCX**, **HTML/HTM**, and **Emacs Org-mode** files offline without external Python dependencies.
+- **Directory Ingestion Expansion**: Updated directory scanning defaults in `ingest.py` to automatically discover and index `.docx`, `.html`, `.htm`, and `.org` files.
+
+---
+
 ## [0.3.4] - 2026-06-05
 
 ### Added

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psyche"
-version = "0.3.4"
+version = "0.3.5"
 description = "A lightweight, high-performance GraphRAG CLI engine for books and notes"
 readme = "README.md"
 authors = [
