@@ -111,11 +111,21 @@ def init_db(db_path: str):
     conn.close()
 
 def get_connection(db_path: str) -> sqlite3.Connection:
-    """Returns a connection to the SQLite database."""
+    """Returns a connection to the SQLite database with sqlite-vec loaded if available."""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    
+    # Try to load sqlite-vec dynamically
+    try:
+        import sqlite_vec
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+    except Exception:
+        pass
+        
     return conn
+
 
 def check_checksum(conn: sqlite3.Connection, checksum: str) -> int | None:
     """Checks if a file with the given checksum has already been ingested.
@@ -153,7 +163,7 @@ def add_chunk(conn: sqlite3.Connection, source_id: int, chunk_index: int, text: 
     return chunk_id
 
 def add_embedding(conn: sqlite3.Connection, chunk_id: int, embedding: list[float] | np.ndarray):
-    """Serializes and adds an embedding vector for a specific chunk."""
+    """Serializes and adds an embedding vector for a specific chunk, writing to sqlite-vec if available."""
     cursor = conn.cursor()
     # Convert embedding list/array to float32 binary representation
     vector_arr = np.array(embedding, dtype=np.float32)
@@ -163,6 +173,44 @@ def add_embedding(conn: sqlite3.Connection, chunk_id: int, embedding: list[float
         (chunk_id, blob)
     )
     conn.commit()
+    
+    # Try to write to sqlite-vec virtual table
+    try:
+        dim = len(vector_arr)
+        cursor.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(chunk_id INTEGER PRIMARY KEY, embedding FLOAT[{dim}] distance_metric=cosine)")
+        cursor.execute(
+            "INSERT OR REPLACE INTO vec_chunks (chunk_id, embedding) VALUES (?, ?)",
+            (chunk_id, blob)
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+def search_vector_vec(conn: sqlite3.Connection, query_vector: list[float] | np.ndarray, limit: int = 20) -> list[tuple[int, float]]:
+    """Performs vector search using sqlite-vec if the vec_chunks virtual table exists."""
+    cursor = conn.cursor()
+    # Check if vec_chunks exists
+    try:
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='vec_chunks'")
+        if not cursor.fetchone():
+            return []
+            
+        vec_arr = np.array(query_vector, dtype=np.float32)
+        blob = vec_arr.tobytes()
+        
+        # sqlite-vec MATCH query returns distance. For cosine distance, similarity = 1 - distance
+        cursor.execute("""
+            SELECT 
+                chunk_id, 
+                distance
+            FROM vec_chunks
+            WHERE embedding MATCH ? AND k = ?
+        """, (blob, limit))
+        rows = cursor.fetchall()
+        return [(int(row[0]), 1.0 - float(row[1])) for row in rows]
+    except sqlite3.OperationalError:
+        return []
+
 
 def get_all_embeddings_with_chunks(conn: sqlite3.Connection) -> list[dict]:
     """Retrieves all chunk texts, locations, and deserializes their corresponding embeddings."""
@@ -469,6 +517,10 @@ def check_and_migrate_embeddings(db_path: str, llm):
         if config_model == "none":
             console.print("[yellow]AI-Free mode configured. Clearing existing database embeddings...[/yellow]")
             cursor.execute("DELETE FROM embeddings")
+            try:
+                cursor.execute("DROP TABLE IF EXISTS vec_chunks")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
             set_metadata(conn, "embed_model", "none")
             console.print("[green]✨ Database embeddings cleared successfully.[/green]\n")
@@ -495,9 +547,20 @@ def check_and_migrate_embeddings(db_path: str, llm):
 
         # Clear old embeddings and save new ones
         cursor.execute("DELETE FROM embeddings")
+        try:
+            cursor.execute("DROP TABLE IF EXISTS vec_chunks")
+        except sqlite3.OperationalError:
+            pass
         
         # We can insert using add_embedding logic but inline for efficiency
         import numpy as np
+        dim = len(embeddings[0]) if len(embeddings) > 0 else 0
+        if dim > 0:
+            try:
+                cursor.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(chunk_id INTEGER PRIMARY KEY, embedding FLOAT[{dim}] distance_metric=cosine)")
+            except sqlite3.OperationalError:
+                pass
+                
         for cid, emb in zip(chunk_ids, embeddings):
             vector_arr = np.array(emb, dtype=np.float32)
             blob = vector_arr.tobytes()
@@ -505,6 +568,13 @@ def check_and_migrate_embeddings(db_path: str, llm):
                 "INSERT INTO embeddings (chunk_id, embedding_blob) VALUES (?, ?)",
                 (cid, blob)
             )
+            try:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO vec_chunks (chunk_id, embedding) VALUES (?, ?)",
+                    (cid, blob)
+                )
+            except sqlite3.OperationalError:
+                pass
         
         set_metadata(conn, "embed_model", config_model)
         conn.commit()

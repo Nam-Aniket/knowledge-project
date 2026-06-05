@@ -15,7 +15,7 @@ from prompt_toolkit.completion import WordCompleter
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, search_fts, resolve_db_path, check_and_migrate_embeddings, get_all_embeddings_only, get_chunks_by_ids, search_fts_ids
+from db import get_connection, get_all_embeddings_with_chunks, search_fts, resolve_db_path, check_and_migrate_embeddings, get_all_embeddings_only, get_chunks_by_ids, search_fts_ids, search_vector_vec
 from llm_client import LLMClient
 
 # Initialize rich console
@@ -103,10 +103,21 @@ def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, 
     """Runs semantic and keyword search, combining them via Reciprocal Rank Fusion (RRF)."""
     # 1. Semantic search
     semantic_results = []
-    if llm.provider != "none" and embeddings_matrix.size > 0:
+    if llm.provider != "none":
         try:
             q_vector = llm.get_embedding(query_text)
-            semantic_results = calculate_similarities_vectorized(q_vector, chunk_ids, embeddings_matrix)
+            
+            # First attempt: Try SQLite-vec C-level vector search
+            conn = get_connection(db_path)
+            try:
+                semantic_results = search_vector_vec(conn, q_vector, limit=limit)
+            finally:
+                conn.close()
+                
+            # Fallback: If sqlite-vec returned nothing (extension not loaded or table missing)
+            # but we have in-memory embeddings, use NumPy vectorized search!
+            if not semantic_results and embeddings_matrix.size > 0:
+                semantic_results = calculate_similarities_vectorized(q_vector, chunk_ids, embeddings_matrix)
         except Exception as sem_err:
             console.print(f"[dim]Note: Semantic search failed, falling back to keyword-only. ({sem_err})[/dim]")
     
@@ -139,6 +150,7 @@ def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, 
         results.append((r, scores_map[cid]))
         
     return results
+
 
 def format_context(similar_chunks: list[tuple[dict, float]], top_n: int = 5) -> str:
     """Formats retrieved chunks into a standard RAG context block."""
