@@ -15,7 +15,7 @@ from prompt_toolkit.completion import WordCompleter
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, search_fts, resolve_db_path, check_and_migrate_embeddings
+from db import get_connection, get_all_embeddings_with_chunks, search_fts, resolve_db_path, check_and_migrate_embeddings, get_all_embeddings_only, get_chunks_by_ids, search_fts_ids
 from llm_client import LLMClient
 
 # Initialize rich console
@@ -50,51 +50,95 @@ def calculate_similarities(query_vector: list[float] | np.ndarray, chunk_records
     results.sort(key=lambda x: x[1], reverse=True)
     return results
 
-def reciprocal_rank_fusion(semantic_results: list[tuple[dict, float]], keyword_results: list[dict], k: int = 60) -> list[tuple[dict, float]]:
+def calculate_similarities_vectorized(query_vector: list[float] | np.ndarray, chunk_ids: np.ndarray, embeddings_matrix: np.ndarray) -> list[tuple[int, float]]:
+    """Calculates cosine similarity between query embedding and all chunk embeddings using vectorized matrix operations."""
+    q_vec = np.array(query_vector, dtype=np.float32)
+    q_norm = np.linalg.norm(q_vec)
+    if q_norm == 0 or embeddings_matrix.size == 0:
+        return []
+        
+    norms = np.linalg.norm(embeddings_matrix, axis=1)
+    norms = np.where(norms == 0, 1e-10, norms)
+    
+    similarities = np.dot(embeddings_matrix, q_vec) / (q_norm * norms)
+    results = list(zip(chunk_ids.tolist(), similarities.tolist()))
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
+
+def reciprocal_rank_fusion(semantic_results: list[tuple], keyword_results: list, k: int = 60) -> list[tuple]:
     """Combines semantic search results and keyword search results using Reciprocal Rank Fusion.
     
-    Returns a list of (record, rrf_score) sorted by score descending.
+    Supports both chunk records (dict) and raw chunk IDs (int).
     """
     rrf_scores = {}
     
-    # 1. Rank based on semantic scores
-    for rank, (record, _) in enumerate(semantic_results, 1):
-        chunk_id = record["chunk_id"]
-        if chunk_id not in rrf_scores:
-            rrf_scores[chunk_id] = {"record": record, "score": 0.0}
-        rrf_scores[chunk_id]["score"] += 1.0 / (k + rank)
+    def get_key_and_obj(item):
+        if isinstance(item, tuple):
+            val = item[0]
+        else:
+            val = item
+            
+        if isinstance(val, dict):
+            return val["chunk_id"], val
+        else:
+            return val, val
+            
+    for rank, item in enumerate(semantic_results, 1):
+        key, obj = get_key_and_obj(item)
+        if key not in rrf_scores:
+            rrf_scores[key] = {"obj": obj, "score": 0.0}
+        rrf_scores[key]["score"] += 1.0 / (k + rank)
         
-    # 2. Rank based on keyword scores
-    for rank, record in enumerate(keyword_results, 1):
-        chunk_id = record["chunk_id"]
-        if chunk_id not in rrf_scores:
-            rrf_scores[chunk_id] = {"record": record, "score": 0.0}
-        rrf_scores[chunk_id]["score"] += 1.0 / (k + rank)
+    for rank, item in enumerate(keyword_results, 1):
+        key, obj = get_key_and_obj(item)
+        if key not in rrf_scores:
+            rrf_scores[key] = {"obj": obj, "score": 0.0}
+        rrf_scores[key]["score"] += 1.0 / (k + rank)
         
-    combined = [(item["record"], item["score"]) for item in rrf_scores.values()]
+    combined = [(item["obj"], item["score"]) for item in rrf_scores.values()]
     combined.sort(key=lambda x: x[1], reverse=True)
     return combined
 
-def perform_hybrid_search(db_path: str, query_text: str, semantic_records: list[dict], llm: LLMClient) -> list[tuple[dict, float]]:
+def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, embeddings_matrix: np.ndarray, llm: LLMClient, limit: int = 30) -> list[tuple[dict, float]]:
     """Runs semantic and keyword search, combining them via Reciprocal Rank Fusion (RRF)."""
     # 1. Semantic search
     semantic_results = []
-    if llm.provider != "none":
+    if llm.provider != "none" and embeddings_matrix.size > 0:
         try:
             q_vector = llm.get_embedding(query_text)
-            semantic_results = calculate_similarities(q_vector, semantic_records)
+            semantic_results = calculate_similarities_vectorized(q_vector, chunk_ids, embeddings_matrix)
         except Exception as sem_err:
             console.print(f"[dim]Note: Semantic search failed, falling back to keyword-only. ({sem_err})[/dim]")
     
     # 2. Keyword search
     conn = get_connection(db_path)
     try:
-        keyword_results = search_fts(conn, query_text, limit=30)
+        keyword_results = search_fts_ids(conn, query_text, limit=limit)
+    except Exception as kw_err:
+        console.print(f"[dim]Note: Keyword search failed. ({kw_err})[/dim]")
+        keyword_results = []
     finally:
         conn.close()
         
     # 3. Combine via RRF
-    return reciprocal_rank_fusion(semantic_results, keyword_results)
+    combined_ids_scores = reciprocal_rank_fusion(semantic_results, keyword_results)
+    top_ids_scores = combined_ids_scores[:limit]
+    top_ids = [cid for cid, _ in top_ids_scores]
+    scores_map = dict(top_ids_scores)
+    
+    # 4. Fetch actual chunk texts from DB only for the top IDs
+    conn = get_connection(db_path)
+    try:
+        records = get_chunks_by_ids(conn, top_ids)
+    finally:
+        conn.close()
+        
+    results = []
+    for r in records:
+        cid = r["chunk_id"]
+        results.append((r, scores_map[cid]))
+        
+    return results
 
 def format_context(similar_chunks: list[tuple[dict, float]], top_n: int = 5) -> str:
     """Formats retrieved chunks into a standard RAG context block."""
@@ -288,14 +332,16 @@ def main():
     # Check and run database embedding migrations if LLM config changed
     check_and_migrate_embeddings(db_path, llm)
         
-    # Fetch all records
+    # Verify that database has chunks (check if empty)
     conn = get_connection(db_path)
     try:
-        records = get_all_embeddings_with_chunks(conn)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM chunks")
+        total_chunks = cursor.fetchone()[0]
     finally:
         conn.close()
         
-    if not records:
+    if total_chunks == 0:
         console.print("[bold yellow]Warning:[/bold yellow] Database is empty. Please run ingest.py to add documents first.")
         sys.exit(0)
         
@@ -307,24 +353,48 @@ def main():
         table.add_column("Value")
         
         table.add_row("Database Path", db_path)
-        table.add_row("Total Chunks", str(len(records)))
+        table.add_row("Total Chunks", str(total_chunks))
         
-        # Unique sources details
-        sources_info = {}
-        for r in records:
-            title = r["source_title"]
-            author = r["source_author"]
-            sources_info[title] = author
+        conn = get_connection(db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT title, author FROM sources")
+            sources = cursor.fetchall()
+            sources_info = {title: author for title, author in sources}
+            
+            # Count chunks per book
+            book_counts = {}
+            for title in sources_info:
+                cursor.execute("""
+                    SELECT COUNT(*) 
+                    FROM chunks c 
+                    JOIN sources s ON c.source_id = s.id 
+                    WHERE s.title = ?
+                """, (title,))
+                book_counts[title] = cursor.fetchone()[0]
+        finally:
+            conn.close()
             
         table.add_row("Total Ingested Books", str(len(sources_info)))
         console.print(table)
         
         console.print("\n[bold cyan]📚 Ingested Books Catalog:[/bold cyan]")
         for title, author in sources_info.items():
-            book_chunks = sum(1 for r in records if r["source_title"] == title)
-            console.print(f" - [bold]{title}[/bold] by {author} [dim]({book_chunks} chunks)[/dim]")
+            console.print(f" - [bold]{title}[/bold] by {author} [dim]({book_counts[title]} chunks)[/dim]")
         console.print("")
         sys.exit(0)
+        
+    # Fetch only IDs and embeddings if not in AI-free mode
+    records = []
+    if llm.provider != "none":
+        conn = get_connection(db_path)
+        try:
+            records = get_all_embeddings_only(conn)
+        finally:
+            conn.close()
+            
+    chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
+    embeddings_matrix = np.vstack([r["embedding"] for r in records if r["embedding"] is not None]) if len(records) > 0 else np.array([], dtype=np.float32)
         
     system_instruction = (
         "You are a helpful knowledge assistant. Synthesize a detailed, clear answer based on "
@@ -405,7 +475,7 @@ def main():
             # Perform Hybrid RAG Search
             try:
                 with console.status("[bold cyan]Retrieving context (Hybrid Search)...") as status:
-                    similarities = perform_hybrid_search(db_path, clean_input, records, llm)
+                    similarities = perform_hybrid_search(db_path, clean_input, chunk_ids, embeddings_matrix, llm, limit=args.top)
                     context_str = format_context(similarities, top_n=args.top)
                     
                     # Retrieve concept graph context
@@ -513,7 +583,7 @@ def main():
         
         try:
             with console.status("[bold cyan]Searching database (Hybrid Search)...") as status:
-                similarities = perform_hybrid_search(db_path, query_text, records, llm)
+                similarities = perform_hybrid_search(db_path, query_text, chunk_ids, embeddings_matrix, llm, limit=args.top)
                 context_str = format_context(similarities, top_n=args.top)
                 
                 # Retrieve concept graph context

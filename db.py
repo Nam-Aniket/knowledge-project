@@ -194,11 +194,99 @@ def get_all_embeddings_with_chunks(conn: sqlite3.Connection) -> list[dict]:
         })
     return results
 
-def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> list[dict]:
-    """Searches the FTS5 virtual table for keyword matches and returns the original chunk records."""
+def get_all_embeddings_only(conn: sqlite3.Connection) -> list[dict]:
+    """Retrieves only chunk IDs and their corresponding deserialized embeddings."""
     cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 
+            chunk_id, 
+            embedding_blob 
+        FROM embeddings
+    """)
+    rows = cursor.fetchall()
+    
+    results = []
+    for chunk_id, blob in rows:
+        embedding = np.frombuffer(blob, dtype=np.float32) if blob is not None else None
+        results.append({
+            "chunk_id": chunk_id,
+            "embedding": embedding
+        })
+    return results
+
+def get_chunks_by_ids(conn: sqlite3.Connection, chunk_ids: list[int]) -> list[dict]:
+    """Retrieves detailed records (text, location, source info) for a specific list of chunk IDs, maintaining input order."""
+    if not chunk_ids:
+        return []
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in chunk_ids)
+    cursor.execute(f"""
+        SELECT 
+            c.id, 
+            c.text, 
+            c.location,
+            s.title, 
+            s.author
+        FROM chunks c
+        JOIN sources s ON c.source_id = s.id
+        WHERE c.id IN ({placeholders})
+    """, chunk_ids)
+    rows = cursor.fetchall()
+    
+    records_map = {}
+    for cid, text, location, source_title, source_author in rows:
+        records_map[cid] = {
+            "chunk_id": cid,
+            "text": text,
+            "location": location,
+            "source_title": source_title,
+            "source_author": source_author
+        }
+        
+    results = []
+    for cid in chunk_ids:
+        if cid in records_map:
+            results.append(records_map[cid])
+    return results
+
+
+def search_fts_ids(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> list[tuple[int, float]]:
+    """Searches the FTS5 virtual table for keyword matches and returns only chunk IDs and BM25 scores."""
+    cursor = conn.cursor()
+    # Sanitize search term to prevent syntax errors in MATCH (e.g. trailing wildcards, special characters)
+    # FTS5 queries should be clean alphanumeric or quoted phrases.
+    clean_query = query_text.replace("'", " ").replace('"', ' ').strip()
+    if not clean_query:
+        return []
     try:
-        # FTS5 Match query
+        cursor.execute("""
+            SELECT 
+                chunk_id, 
+                bm25(chunks_fts) AS score
+            FROM chunks_fts
+            WHERE chunks_fts MATCH ?
+            ORDER BY score ASC
+            LIMIT ?
+        """, (clean_query, limit))
+        rows = cursor.fetchall()
+        return [(int(row[0]), float(row[1])) for row in rows]
+    except sqlite3.OperationalError:
+        cursor.execute("""
+            SELECT id 
+            FROM chunks
+            WHERE text LIKE ?
+            LIMIT ?
+        """, (f"%{query_text}%", limit))
+        rows = cursor.fetchall()
+        return [(int(row[0]), 0.0) for row in rows]
+
+def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> list[dict]:
+    """Searches the FTS5 virtual table for keyword matches and returns the original chunk records, ordered by BM25."""
+    cursor = conn.cursor()
+    clean_query = query_text.replace("'", " ").replace('"', ' ').strip()
+    if not clean_query:
+        return []
+    try:
         cursor.execute("""
             SELECT 
                 c.id, 
@@ -212,11 +300,11 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
             JOIN sources s ON c.source_id = s.id
             LEFT JOIN embeddings e ON e.chunk_id = c.id
             WHERE chunks_fts MATCH ?
+            ORDER BY bm25(chunks_fts) ASC
             LIMIT ?
-        """, (query_text, limit))
+        """, (clean_query, limit))
         rows = cursor.fetchall()
     except sqlite3.OperationalError:
-        # Fallback to simple LIKE search if query syntax is not supported by FTS MATCH
         cursor.execute("""
             SELECT 
                 c.id, 
@@ -245,6 +333,7 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
             "embedding": embedding
         })
     return results
+
 
 def add_concept(conn: sqlite3.Connection, name: str, definition: str | None = None, category: str | None = None) -> int:
     """Inserts a concept if it doesn't exist, or updates its definition and category. Returns concept ID."""
