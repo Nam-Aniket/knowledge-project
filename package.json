@@ -1,7 +1,7 @@
 {
-  "name": "psyche-rag",
-  "version": "0.3.3",
-  "description": "Offline GraphRAG and MCP engine for books and Obsidian notes",
+  "name": "psyche",
+  "version": "0.3.4",
+  "description": "High-performance GraphRAG and MCP engine for books and Obsidian notes",
   "main": "bin/cli.js",
   "bin": {
     "psyche": "./bin/cli.js"
@@ -10,12 +10,29 @@
     "postinstall": "node postinstall.js"
   },
   "keywords": [
+    "psyche",
     "rag",
     "graphrag",
     "mcp",
+    "model-context-protocol",
     "obsidian",
-    "knowledge",
-    "ai"
+    "second-brain",
+    "knowledge-graph",
+    "semantic-search",
+    "fts5",
+    "ollama",
+    "local-first",
+    "book-rag",
+    "pdf-rag",
+    "document-ai",
+    "personal-knowledge-management",
+    "python",
+    "sqlite",
+    "gemini",
+    "openai",
+    "epub-parser",
+    "llm",
+    "lightweight-rag"
   ],
   "author": "Nam-Aniket",
   "license": "MIT",

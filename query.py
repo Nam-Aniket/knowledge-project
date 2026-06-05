@@ -25,6 +25,27 @@ err_console = Console(stderr=True)
 # Load environment variables
 load_dotenv()
 
+_ranker = None
+_ranker_loaded = False
+
+def get_ranker():
+    global _ranker, _ranker_loaded
+    if _ranker_loaded:
+        return _ranker
+        
+    rerank_provider = os.getenv("RERANK_PROVIDER", "flashrank").lower()
+    if rerank_provider == "none":
+        _ranker_loaded = True
+        return None
+        
+    try:
+        from flashrank import Ranker
+        _ranker = Ranker()
+    except Exception:
+        pass
+    _ranker_loaded = True
+    return _ranker
+
 def calculate_similarities(query_vector: list[float] | np.ndarray, chunk_records: list[dict]) -> list[tuple[dict, float]]:
     """Calculates cosine similarity between query embedding and all chunk embeddings."""
     q_vec = np.array(query_vector, dtype=np.float32)
@@ -100,7 +121,10 @@ def reciprocal_rank_fusion(semantic_results: list[tuple], keyword_results: list,
     return combined
 
 def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, embeddings_matrix: np.ndarray, llm: LLMClient, usearch_index=None, limit: int = 30) -> list[tuple[dict, float]]:
-    """Runs semantic and keyword search, combining them via Reciprocal Rank Fusion (RRF)."""
+    """Runs semantic and keyword search, combining them via Reciprocal Rank Fusion (RRF) and post-reranked via Cross-Encoder if available."""
+    ranker = get_ranker()
+    search_limit = max(50, limit * 3) if ranker is not None else limit
+
     # 1. Semantic search
     semantic_results = []
     if llm.provider != "none":
@@ -111,7 +135,7 @@ def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, 
             if usearch_index is not None:
                 try:
                     q_arr = np.array(q_vector, dtype=np.float32)
-                    matches = usearch_index.search(q_arr, limit)
+                    matches = usearch_index.search(q_arr, search_limit)
                     semantic_results = [(int(k), 1.0 - float(d)) for k, d in zip(matches.keys, matches.distances)]
                 except Exception:
                     pass
@@ -120,20 +144,22 @@ def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, 
             if not semantic_results:
                 conn = get_connection(db_path)
                 try:
-                    semantic_results = search_vector_vec(conn, q_vector, limit=limit)
+                    semantic_results = search_vector_vec(conn, q_vector, limit=search_limit)
                 finally:
                     conn.close()
                 
             # Tier 3: Fallback to NumPy vectorized search
             if not semantic_results and embeddings_matrix.size > 0:
                 semantic_results = calculate_similarities_vectorized(q_vector, chunk_ids, embeddings_matrix)
+                if len(semantic_results) > search_limit:
+                    semantic_results = semantic_results[:search_limit]
         except Exception as sem_err:
             console.print(f"[dim]Note: Semantic search failed, falling back to keyword-only. ({sem_err})[/dim]")
     
     # 2. Keyword search
     conn = get_connection(db_path)
     try:
-        keyword_results = search_fts_ids(conn, query_text, limit=limit)
+        keyword_results = search_fts_ids(conn, query_text, limit=search_limit)
     except Exception as kw_err:
         console.print(f"[dim]Note: Keyword search failed. ({kw_err})[/dim]")
         keyword_results = []
@@ -142,33 +168,65 @@ def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, 
         
     # 3. Combine via RRF
     combined_ids_scores = reciprocal_rank_fusion(semantic_results, keyword_results)
-    top_ids_scores = combined_ids_scores[:limit]
-    top_ids = [cid for cid, _ in top_ids_scores]
-    scores_map = dict(top_ids_scores)
     
-    # 4. Fetch actual chunk texts from DB only for the top IDs
+    # Determine candidates pool for fetching
+    if ranker is not None:
+        candidate_ids_scores = combined_ids_scores[:search_limit]
+    else:
+        candidate_ids_scores = combined_ids_scores[:limit]
+        
+    top_ids = [cid for cid, _ in candidate_ids_scores]
+    scores_map = dict(candidate_ids_scores)
+    
+    # 4. Fetch actual chunk texts from DB only for the candidate IDs
     conn = get_connection(db_path)
     try:
         records = get_chunks_by_ids(conn, top_ids)
     finally:
         conn.close()
         
+    # 5. Apply local Cross-Encoder reranking if ranker is available
+    if ranker is not None and records:
+        try:
+            passages = []
+            for r in records:
+                passages.append({
+                    "id": r["chunk_id"],
+                    "text": r["text"],
+                    "meta": r
+                })
+                
+            from flashrank import RerankRequest
+            req = RerankRequest(query=query_text, passages=passages)
+            reranked = ranker.rerank(req)
+            
+            results = []
+            for item in reranked[:limit]:
+                results.append((item["meta"], float(item["score"])))
+            return results
+        except Exception as rerank_err:
+            console.print(f"[dim]Note: Reranking failed, falling back to RRF. ({rerank_err})[/dim]")
+            
+    # Fallback/default logic: use RRF scores
     results = []
-    for r in records:
+    for r in records[:limit]:
         cid = r["chunk_id"]
         results.append((r, scores_map[cid]))
         
+    # Ensure sorted by score descending
+    results.sort(key=lambda x: x[1], reverse=True)
     return results
 
 
 def format_context(similar_chunks: list[tuple[dict, float]], top_n: int = 5) -> str:
     """Formats retrieved chunks into a standard RAG context block."""
     context_blocks = []
+    score_label = "Rerank Score" if get_ranker() is not None else "RRF Rank Score"
     for idx, (record, score) in enumerate(similar_chunks[:top_n], 1):
         loc_str = f" [{record['location']}]" if record.get('location') else ""
         block = (
             f"Source [{idx}]: '{record['source_title']}' by {record['source_author']}{loc_str}\n"
-            f"RRF Rank Score: {score:.4f}\n"
+            f"{score_label}: {score:.4f}\n"
             f"Content:\n{record['text']}\n"
         )
         context_blocks.append(block)
@@ -524,9 +582,10 @@ def main():
                     console.print(f"\n[bold yellow]Offline / AI-Free (Pure Retrieval) Matches for:[/bold yellow] '{clean_input}'")
                     if not similarities:
                         console.print("  [dim]No matching text passages found.[/dim]")
+                    score_label = "Rerank Score" if get_ranker() is not None else "RRF Score"
                     for idx, (r, score) in enumerate(similarities[:min(3, args.top)], 1):
                         loc_suffix = f" [{r['location']}]" if r.get('location') else ""
-                        console.print(f"\n  [bold cyan][Passage {idx}][/bold cyan] '{r['source_title']}'{loc_suffix} [dim](RRF Score: {score:.4f})[/dim]")
+                        console.print(f"\n  [bold cyan][Passage {idx}][/bold cyan] '{r['source_title']}'{loc_suffix} [dim]({score_label}: {score:.4f})[/dim]")
                         console.print("  " + "-" * 20)
                         indented = "\n".join("      " + line for line in r['text'].strip().split("\n"))
                         console.print(indented)
@@ -635,9 +694,10 @@ def main():
                 console.print(f"[bold green]Top {min(args.top, len(similarities))} matching passages for query:[/bold green] '{query_text}'\n")
                 if not similarities:
                     console.print("  [dim]No matching text passages found.[/dim]\n")
+                score_label = "Rerank Score" if get_ranker() is not None else "RRF Score"
                 for idx, (record, score) in enumerate(similarities[:args.top], 1):
                     loc_suffix = f" [{record['location']}]" if record.get('location') else ""
-                    console.print(f"[bold cyan][Passage {idx}][/bold cyan] [bold]{record['source_title']}[/bold] by {record['source_author']}{loc_suffix} [dim](RRF Score: {score:.4f})[/dim]")
+                    console.print(f"[bold cyan][Passage {idx}][/bold cyan] [bold]{record['source_title']}[/bold] by {record['source_author']}{loc_suffix} [dim]({score_label}: {score:.4f})[/dim]")
                     console.print("-" * 40)
                     console.print(Markdown(record['text']))
                     console.print("-" * 40 + "\n")
