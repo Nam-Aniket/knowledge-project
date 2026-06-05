@@ -252,6 +252,9 @@ def run_setup():
     # 5. Setup background watcher for automatic background ingestion (run after .env is created)
     setup_background_watcher(project_root_dir)
 
+    # 6. Install Git post-commit hook for automated log generation
+    install_git_post_commit_hook(project_root_dir)
+
 def setup_background_watcher(project_root):
     home = os.path.expanduser("~")
     # Resolve default watch directory based on Obsidian existence
@@ -412,3 +415,41 @@ def run_wizard_phase():
     from llm_client import run_setup_wizard
     env_path = os.path.join(project_root, ".env")
     run_setup_wizard(env_path)
+
+def install_git_post_commit_hook(project_root):
+    git_dir = os.path.join(project_root, ".git")
+    if not os.path.isdir(git_dir):
+        return
+        
+    print("\n🔗 Installing Git post-commit hook for automatic learning logs...")
+    hooks_dir = os.path.join(git_dir, "hooks")
+    os.makedirs(hooks_dir, exist_ok=True)
+    
+    post_commit_path = os.path.join(hooks_dir, "post-commit")
+    
+    # Determine the python binary inside project's virtualenv
+    if sys.platform == "win32":
+        python_bin = os.path.join(project_root, ".venv", "Scripts", "python.exe")
+    else:
+        python_bin = os.path.join(project_root, ".venv", "bin", "python")
+        
+    if not os.path.exists(python_bin):
+        python_bin = "python3"
+        
+    abs_python_bin = os.path.abspath(python_bin)
+    abs_logger_script = os.path.abspath(os.path.join(project_root, "bin", "git_auto_log.py"))
+    
+    # Write post-commit shell script (run logger in the background)
+    hook_content = f"""#!/bin/sh
+# Psyche Automated Git Commit Logger
+"{abs_python_bin}" "{abs_logger_script}" > /dev/null 2>&1 &
+"""
+    try:
+        with open(post_commit_path, "w", encoding="utf-8") as f:
+            f.write(hook_content)
+        # Make hook executable
+        if sys.platform != "win32":
+            os.chmod(post_commit_path, 0o755)
+        print(f"✅ Successfully installed Git post-commit hook at: {post_commit_path}")
+    except Exception as e:
+        print(f"⚠️  Could not install Git post-commit hook: {e}")
