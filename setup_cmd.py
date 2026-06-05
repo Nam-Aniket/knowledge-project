@@ -240,9 +240,6 @@ def run_setup():
     register_mcp_configs(python_bin, project_root_dir)
     register_slash_prompts(project_root_dir)
     
-    # 3.6 Setup background watcher for automatic background ingestion
-    setup_background_watcher(project_root_dir)
-
     # 4. Run setup wizard using the virtualenv python to avoid ModuleNotFound errors
     print("\nLaunching Interactive Setup Wizard...")
     os.environ["PSYCHE_SETUP_WIZARD_ONLY"] = "true"
@@ -251,6 +248,9 @@ def run_setup():
     
     # We run 'setup' subcommand via virtual env python
     subprocess.run([python_bin, "cli.py", "setup"], env=env, check=True)
+
+    # 5. Setup background watcher for automatic background ingestion (run after .env is created)
+    setup_background_watcher(project_root_dir)
 
 def setup_background_watcher(project_root):
     home = os.path.expanduser("~")
