@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import sqlite3
 import argparse
 import numpy as np
 from dotenv import load_dotenv

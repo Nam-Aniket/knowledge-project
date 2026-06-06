@@ -5,6 +5,12 @@ import posixpath
 from html.parser import HTMLParser
 from pypdf import PdfReader
 
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
+
+
 class EpubTextParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -188,8 +194,26 @@ def extract_epub_text(file_path: str) -> list[dict]:
     return blocks
 
 def extract_pdf_text(file_path: str) -> list[dict]:
-    """Extracts plain text grouped by page numbers from a PDF file using pypdf."""
+    """Extracts plain text grouped by page numbers from a PDF file using PyMuPDF (with pypdf fallback)."""
     pages_data = []
+    
+    # 1. Try PyMuPDF (fitz) first for robust and fast parsing
+    if fitz is not None:
+        try:
+            doc = fitz.open(file_path)
+            for i, page in enumerate(doc):
+                text = page.get_text()
+                if text and text.strip():
+                    pages_data.append({
+                        "text": text,
+                        "location": f"Page {i + 1}"
+                    })
+            return pages_data
+        except Exception:
+            # Fallback to pypdf if PyMuPDF fails on this specific file
+            pages_data = []
+            
+    # 2. Fallback to pypdf
     try:
         reader = PdfReader(file_path)
         for i, page in enumerate(reader.pages):
@@ -203,6 +227,7 @@ def extract_pdf_text(file_path: str) -> list[dict]:
         raise ValueError(f"Failed to read PDF file: {e}")
         
     return pages_data
+
 
 def parse_obsidian_markdown(content: str) -> tuple[str, list[str]]:
     """

@@ -719,5 +719,94 @@ class TestDatabaseMigration(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(list(records[0]["embedding"]), [10.0, 20.0, 30.0])
 
+    def test_remove_source(self):
+        # 1. Add source, chunk, embedding
+        source_id = db.add_source(
+            self.conn, 
+            title="Book to Delete", 
+            author="Author X", 
+            file_path="tests/delete.txt", 
+            checksum="delete_checksum"
+        )
+        chunk_id = db.add_chunk(self.conn, source_id, chunk_index=0, text="This is text to be deleted from FTS.", location="Page 1")
+        db.add_embedding(self.conn, chunk_id, [0.1, 0.2])
+        
+        # Verify it exists in FTS and normal tables
+        results = db.search_fts(self.conn, "deleted from FTS")
+        self.assertEqual(len(results), 1)
+        
+        # 2. Remove the source
+        db.remove_source(self.conn, source_id)
+        
+        # 3. Verify it is gone from sources, chunks, embeddings, and FTS
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM sources WHERE id = ?", (source_id,))
+        self.assertEqual(cursor.fetchone()[0], 0)
+        
+        cursor.execute("SELECT COUNT(*) FROM chunks WHERE source_id = ?", (source_id,))
+        self.assertEqual(cursor.fetchone()[0], 0)
+        
+        # Verify FTS clean up
+        results_after = db.search_fts(self.conn, "deleted from FTS")
+        self.assertEqual(len(results_after), 0)
+
+class TestRAGReIngest(unittest.TestCase):
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        db.init_db(self.db_path)
+        self.conn = db.get_connection(self.db_path)
+        
+        # Create temp files to ingest
+        self.temp_file_fd, self.temp_file_path = tempfile.mkstemp(suffix=".txt")
+        with open(self.temp_file_path, "w", encoding="utf-8") as f:
+            f.write("This is document content that is longer than fifty characters to avoid being filtered out by the chunking threshold.")
+
+
+    def tearDown(self):
+        self.conn.close()
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+        os.close(self.temp_file_fd)
+        os.unlink(self.temp_file_path)
+
+    @mock.patch('ingest.LLMClient')
+    def test_ingest_duplicate_and_force(self, mock_llm_class):
+        mock_llm = mock.Mock()
+        mock_llm.provider = "none"
+        mock_llm.embed_model = "none"
+        mock_llm_class.return_value = mock_llm
+        
+        # 1. Ingest first time
+        with mock.patch('sys.argv', ['psyche', self.temp_file_path, '--db-path', self.db_path]):
+            ingest.main()
+            
+        # Verify it has 1 source and 1 chunk
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM sources")
+        self.assertEqual(cursor.fetchone()[0], 1)
+        cursor.execute("SELECT id FROM sources")
+        first_source_id = cursor.fetchone()[0]
+        
+        # 2. Ingest second time without --force (should skip)
+        with mock.patch('sys.argv', ['psyche', self.temp_file_path, '--db-path', self.db_path]):
+            ingest.main()
+            
+        # Verify still 1 source and it has the same ID
+        cursor.execute("SELECT COUNT(*) FROM sources")
+        self.assertEqual(cursor.fetchone()[0], 1)
+        cursor.execute("SELECT id FROM sources")
+        self.assertEqual(cursor.fetchone()[0], first_source_id)
+        
+        # 3. Ingest third time with --force (should re-ingest and get new ID)
+        with mock.patch('sys.argv', ['psyche', self.temp_file_path, '--db-path', self.db_path, '--force']):
+            ingest.main()
+            
+        # Verify still 1 source, but ID has changed
+        cursor.execute("SELECT COUNT(*) FROM sources")
+        self.assertEqual(cursor.fetchone()[0], 1)
+        cursor.execute("SELECT id FROM sources")
+        self.assertNotEqual(cursor.fetchone()[0], first_source_id)
+
 if __name__ == "__main__":
     unittest.main()
+

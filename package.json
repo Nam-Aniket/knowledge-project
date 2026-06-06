@@ -1,7 +1,7 @@
 {
   "name": "psyche",
   "version": "0.4.0",
-  "description": "Local-first RAG and Model Context Protocol (MCP) memory layer for coding assistants (Cursor, Claude Desktop, Antigravity) with SQLite hybrid search and local reranking.",
+  "description": "Turn your Obsidian vaults, books, and documents into a local-first, private searchable knowledge and memory layer for AI assistants (Cursor, Claude Desktop, Antigravity).",
   "main": "bin/cli.js",
   "bin": {
     "psyche": "./bin/cli.js"

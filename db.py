@@ -179,6 +179,27 @@ def add_source(conn: sqlite3.Connection, title: str, author: str | None, file_pa
     conn.commit()
     return cursor.lastrowid
 
+def remove_source(conn: sqlite3.Connection, source_id: int):
+    """Deletes a source and all associated chunks, embeddings, and virtual table indexes."""
+    cursor = conn.cursor()
+    # Get all chunk IDs first to clean up virtual tables
+    cursor.execute("SELECT id FROM chunks WHERE source_id = ?", (source_id,))
+    chunk_ids = [row[0] for row in cursor.fetchall()]
+    
+    if chunk_ids:
+        placeholders = ",".join("?" for _ in chunk_ids)
+        # Delete from chunks_fts
+        cursor.execute(f"DELETE FROM chunks_fts WHERE chunk_id IN ({placeholders})", chunk_ids)
+        # Delete from vec_chunks
+        try:
+            cursor.execute(f"DELETE FROM vec_chunks WHERE chunk_id IN ({placeholders})", chunk_ids)
+        except sqlite3.OperationalError:
+            pass
+            
+    # Delete from sources (will cascade delete chunks and embeddings)
+    cursor.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+    conn.commit()
+
 def add_chunk(conn: sqlite3.Connection, source_id: int, chunk_index: int, text: str, location: str | None = None) -> int:
     """Adds a chunk of text to the database with location metadata and indexes it in FTS5. Returns the chunk ID."""
     cursor = conn.cursor()

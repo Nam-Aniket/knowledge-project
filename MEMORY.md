@@ -65,3 +65,9 @@ At the end of any session:
 
 ### 2026-06-05: Establishing the Hermes memory loop
 * **Action**: Created [MEMORY.md](file:///Users/aniketnamjoshi/knowledge-project/MEMORY.md) to serve as a working memory file for all current and future assistant sessions.
+
+### 2026-06-05: release v0.4.0 & GraphRAG compilation
+* **Action**: Bumped version to `0.4.0` in `package.json`, `pyproject.toml`, and `README.md`. Optimized package keyword metadata for NPM and PyPI to boost Google and GitHub search index visibility.
+* **Feature**: Built the native write-back memory engine (WAL mode, database migrations, incremental HNSW updates, compaction script, and tools) and pushed the commit branch to origin.
+* **GraphRAG**: Compiled the co-occurrence GraphRAG concept network from 22,383 database chunks, extracting 30 core concepts and 53 links.
+
