@@ -76,6 +76,17 @@ Ingest a library of research papers, PDFs, or EPUB books. Psyche extracts text a
 npx psyche ingest ~/Downloads/Books --ext pdf,epub
 ```
 
+> [!TIP]
+> **Robust PDF Extraction:** If your PDFs are malformed or show warnings (e.g., `Ignoring wrong pointing object`), install `pymupdf` in Psyche's environment for highly robust, C-accelerated parsing:
+> ```bash
+> pip install pymupdf
+> ```
+> **Re-ingestion / Overwriting:** If you want to force re-ingestion of already processed documents (e.g., to upgrade their extracted contents using PyMuPDF), use the `--force` (or `-f`) flag:
+> ```bash
+> npx psyche ingest ~/Downloads/Books --force
+> ```
+
+
 ### 💾 Run fully offline with Ollama
 Configure Ollama (`llama3` + `nomic-embed-text`) during the setup wizard to query your index completely offline with no network connection at all:
 ```bash

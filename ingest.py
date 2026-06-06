@@ -12,7 +12,7 @@ from rich.table import Table
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import init_db, get_connection, check_checksum, add_source, add_chunk, add_embedding, resolve_db_path, check_and_migrate_embeddings, build_or_update_usearch_index
+from db import init_db, get_connection, check_checksum, add_source, add_chunk, add_embedding, resolve_db_path, check_and_migrate_embeddings, build_or_update_usearch_index, remove_source
 from parsers import extract_text
 from llm_client import LLMClient
 
@@ -72,6 +72,8 @@ def main():
     parser.add_argument("--chunk-size", type=int, default=1500, help="Target chunk size in characters.")
     parser.add_argument("--overlap", type=int, default=300, help="Overlap between chunks in characters.")
     parser.add_argument("--ext", help="Comma-separated file extensions to filter by during directory scanning (e.g. 'epub,pdf').")
+    parser.add_argument("--force", "-f", action="store_true", help="Force re-ingestion of already ingested files.")
+
     
     args = parser.parse_args()
     
@@ -141,9 +143,14 @@ def main():
             checksum = calculate_sha256(path)
             existing_id = check_checksum(conn, checksum)
             if existing_id is not None:
-                console.print(f"[dim]⏭️  Skipping (already ingested): {os.path.basename(path)}[/dim]")
-                skipped_count += 1
-                continue
+                if args.force:
+                    console.print(f"[yellow]🔄 Re-ingesting (forced): {os.path.basename(path)}[/yellow]")
+                    remove_source(conn, existing_id)
+                else:
+                    console.print(f"[dim]⏭️  Skipping (already ingested): {os.path.basename(path)}[/dim]")
+                    skipped_count += 1
+                    continue
+
                 
             title = args.title if (len(files_to_ingest) == 1 and args.title) else clean_title_from_filename(path)
             author = args.author or "Unknown"
