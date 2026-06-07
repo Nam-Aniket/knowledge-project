@@ -1,0 +1,49 @@
+domain: career
+description: Career development, job search, skills, and professional growth
+stages:
+  - name: exploring
+    description: Exploring options, unclear direction
+  - name: planning
+    description: Clear target role, building strategy
+  - name: executing
+    description: Actively applying, interviewing, shipping work
+  - name: reviewing
+    description: Reviewing results, adjusting approach
+diagnostic_questions:
+  - What role or career outcome are you aiming for?
+  - What skills do you currently have?
+  - What skills are you missing for your target?
+  - What is your current application/interview pipeline?
+  - What is working in your current approach?
+  - What is not working?
+  - How will you know when you've succeeded?
+  - What is the smallest action you could take this week?
+metrics:
+  - name: applications
+    type: objective
+    unit: count/week
+  - name: replies
+    type: objective
+    unit: count/week
+  - name: interviews
+    type: objective
+    unit: count/week
+  - name: projects_shipped
+    type: objective
+    unit: count
+  - name: skills_practiced
+    type: objective
+    unit: hours/week
+  - name: career_confidence
+    type: subjective
+    unit: 1-10
+search_terms:
+  - career
+  - job
+  - resume
+  - interview
+  - skills
+  - portfolio
+  - networking
+  - promotion
+  - salary

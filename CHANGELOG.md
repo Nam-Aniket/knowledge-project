@@ -2,6 +2,17 @@
 
 All notable changes to the **Psyche** project will be documented in this file.
 
+## [0.5.0] - 2026-06-08
+
+### Added
+- **Personal Upgrade & Guidance Layer**: Evolved Psyche beyond RAG into a knowledge-guided decision system. Added structured workflows for Goals, Experiments, Metric tracking, Reviews, and Personal Rules.
+- **Guidance Engine**: New `psyche guide` subcommand that synthesizes retrieved knowledge into structured, actionable JSON-based guidance briefs.
+- **MCP Guidance Tools**: Added `generate_guidance` and `list_goals_and_experiments` tools to expose the guidance layer to AI assistants.
+- **Domain Packs**: Domain-specific heuristics and metrics for business, health, wealth, career, happiness, and ideation.
+- **Idea Generation**: Expanded domain detection to include an `ideation` workflow for expanding ideas grounded in knowledge.
+
+---
+
 ## [0.3.5] - 2026-06-05
 
 ### Added

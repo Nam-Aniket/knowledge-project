@@ -1,0 +1,52 @@
+domain: wealth
+description: Personal finance, saving, investing, and debt management
+stages:
+  - name: exploring
+    description: Learning basics, assessing current situation
+  - name: planning
+    description: Setting budget, choosing strategy
+  - name: executing
+    description: Following the plan, tracking progress
+  - name: reviewing
+    description: Reviewing net worth, adjusting allocations
+diagnostic_questions:
+  - What is your current financial goal?
+  - What is your monthly income and expenses?
+  - What is your current savings rate?
+  - Do you have an emergency fund?
+  - What debts do you have and at what interest rates?
+  - What investment accounts do you have?
+  - What is your risk tolerance?
+  - What is the biggest financial risk you face right now?
+metrics:
+  - name: income
+    type: objective
+    unit: AUD/month
+  - name: expenses
+    type: objective
+    unit: AUD/month
+  - name: savings_rate
+    type: objective
+    unit: percentage
+  - name: net_worth
+    type: objective
+    unit: AUD
+  - name: debt
+    type: objective
+    unit: AUD
+  - name: financial_confidence
+    type: subjective
+    unit: 1-10
+search_terms:
+  - money
+  - finance
+  - saving
+  - investing
+  - wealth
+  - budget
+  - debt
+  - income
+  - expenses
+  - net worth
+  - stocks
+  - compound interest

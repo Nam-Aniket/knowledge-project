@@ -3,7 +3,7 @@
 <div align="center">
   <p><strong>Give any AI assistant searchable, cited access to your private notes and documents.</strong></p>
 
-  [![Version](https://img.shields.io/badge/version-0.4.0-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
+  [![Version](https://img.shields.io/badge/version-0.5.0-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![Model Context Protocol](https://img.shields.io/badge/MCP-Enabled-orange.svg?style=for-the-badge)](https://modelcontextprotocol.io)
@@ -14,9 +14,9 @@
 
 ## 🎯 Why This Matters
 
-> **Turn your Obsidian vaults, books, and documents into a private, local-first searchable knowledge and memory layer for AI assistants.**
+> **Turn your Obsidian vaults, books, and documents into a private, local-first knowledge-guided decision and experiment tracking system for AI assistants.**
 
-Standard LLM assistants operate within a temporary, sliding window of context—every time you start a new chat, your guidelines, preferences, and documentation are completely forgotten. Psyche bridges this gap by giving your AI tools a stateful, local-first memory companion that runs 100% offline. It allows you to build a persistent, private second brain that your coding agents can search, reference, and write to dynamically.
+Standard LLM assistants operate within a temporary, sliding window of context—every time you start a new chat, your guidelines, goals, and learnings are completely forgotten. Psyche bridges this gap by giving your AI tools a stateful, local-first guidance engine that runs 100% offline. It allows you to build a persistent, private second brain that tracks your goals, generates knowledge-grounded experiments, and helps you formulate personal rules.
 
 ---
 
@@ -57,6 +57,20 @@ Rather than treating RAG as a static, read-only search engine, Psyche implements
 2.  **Core Memory (RAM)**: Key-value facts and project guidelines (e.g. coding preferences, styling choices, naming rules) that the agent writes and reads dynamically (`write_memory_core`).
 3.  **Archival Memory (Disk)**: Vector-embedded logs, learnings, and debugging context that the agent archives for long-term reference (`append_memory_archival`).
 4.  **Interaction History (Recall)**: Stateful logging of conversation turns to ensure context persistence across assistant sessions (`record_interaction`).
+
+---
+
+## 🧭 Personal Upgrade & Guidance Engine
+
+Psyche goes beyond static memory by actively tracking your goals, experiments, and learnings across domains (Business, Health, Wealth, Career, Happiness, and Ideation). AI agents use this layer to act as your personal coach, grounded strictly in the knowledge you have ingested.
+
+- **Goals & Metrics**: Track what you are trying to achieve and the objective metrics that define success.
+- **Experiments**: Formulate actionable hypotheses grounded in your notes and books, complete with success/failure conditions.
+- **Reviews**: Log what happened, what worked, and what didn't to extract actionable lessons.
+- **Personal Rules**: Crystalize hard-learned lessons into enduring principles that the AI will remind you of in future sessions.
+- **Idea Generation**: Expand upon raw ideas using your knowledge base to generate actionable prototypes and next steps.
+
+When an AI assistant calls the `generate_guidance` tool, Psyche uses Reciprocal Rank Fusion and Cross-Encoder reranking to find the most relevant principles from your documents, compares them to your current goals and rules, and outputs a structured **Guidance Brief** detailing exactly what you should do next.
 
 ---
 

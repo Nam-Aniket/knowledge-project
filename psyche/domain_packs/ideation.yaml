@@ -1,0 +1,36 @@
+domain: ideation
+description: Expanding on raw ideas using your knowledge base to generate actionable prototypes and next steps.
+stages:
+  - name: exploring
+    description: Brainstorming, raw idea generation
+  - name: planning
+    description: Structuring the idea, finding knowledge connections
+  - name: executing
+    description: Building a prototype or proof of concept
+  - name: reviewing
+    description: Validating the prototype against reality
+diagnostic_questions:
+  - What is the core problem this idea solves?
+  - Who would benefit the most from this idea?
+  - What related concepts in your knowledge base connect to this idea?
+  - What is the smallest, fastest way to test if this idea has merit?
+  - What assumptions must be true for this idea to work?
+  - What would a minimum viable prototype look like?
+metrics:
+  - name: prototypes_built
+    type: objective
+    unit: count
+  - name: feedback_conversations
+    type: objective
+    unit: count
+  - name: idea_confidence
+    type: subjective
+    unit: 1-10
+search_terms:
+  - idea
+  - brainstorm
+  - prototype
+  - concept
+  - design
+  - innovation
+  - creativity

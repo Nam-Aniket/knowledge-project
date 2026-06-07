@@ -35,197 +35,29 @@ err_console = Console(stderr=True)
 
 DOMAINS_DIR = os.path.expanduser("~/.psyche/domains")
 
-SEED_PACKS = {
-    "general": {
-        "domain": "general",
-        "description": "General-purpose decision making and problem solving",
-        "stages": [
-            {"name": "exploring", "description": "Gathering information, no clear plan yet"},
-            {"name": "planning", "description": "Clear goal, building strategy"},
-            {"name": "executing", "description": "Active execution, measuring results"},
-            {"name": "reviewing", "description": "Reviewing outcomes, extracting lessons"},
-        ],
-        "diagnostic_questions": [
-            "What specific outcome are you trying to achieve?",
-            "What have you already tried?",
-            "What is the biggest obstacle right now?",
-            "How will you know if this is working? What would you measure?",
-            "What is the smallest next action you could take?",
-            "What is the worst realistic outcome if this fails?",
-            "What knowledge or information are you missing?",
-            "What assumptions are you making?",
-        ],
-        "metrics": [],
-        "search_terms": [],
-    },
-    "business": {
-        "domain": "business",
-        "description": "Business development, sales, revenue, and growth",
-        "stages": [
-            {"name": "exploring", "description": "Researching market, no product/service yet"},
-            {"name": "planning", "description": "Building strategy, validating idea"},
-            {"name": "executing", "description": "Actively selling, iterating on product"},
-            {"name": "reviewing", "description": "Reviewing metrics, adjusting strategy"},
-        ],
-        "diagnostic_questions": [
-            "What specific outcome are you trying to achieve?",
-            "Who is your target customer?",
-            "What have you already tried?",
-            "What is your current conversion rate or key metric?",
-            "What is the biggest obstacle to growth right now?",
-            "How will you know if this is working?",
-            "What assumptions are you making about the market?",
-            "What is the smallest next experiment you could run?",
-        ],
-        "metrics": [
-            {"name": "outreach_count", "type": "objective", "unit": "count/week"},
-            {"name": "reply_rate", "type": "objective", "unit": "percentage"},
-            {"name": "calls_booked", "type": "objective", "unit": "count/week"},
-            {"name": "revenue", "type": "objective", "unit": "AUD/month"},
-            {"name": "retention_rate", "type": "objective", "unit": "percentage"},
-            {"name": "confidence", "type": "subjective", "unit": "1-10"},
-        ],
-        "search_terms": ["business", "sales", "revenue", "customer", "marketing", "growth", "funnel", "outreach", "startup"],
-    },
-    "wealth": {
-        "domain": "wealth",
-        "description": "Personal finance, saving, investing, and debt management",
-        "stages": [
-            {"name": "exploring", "description": "Learning basics, assessing current situation"},
-            {"name": "planning", "description": "Setting budget, choosing strategy"},
-            {"name": "executing", "description": "Following the plan, tracking progress"},
-            {"name": "reviewing", "description": "Reviewing net worth, adjusting allocations"},
-        ],
-        "diagnostic_questions": [
-            "What is your current financial goal?",
-            "What is your monthly income and expenses?",
-            "What is your current savings rate?",
-            "Do you have an emergency fund?",
-            "What debts do you have and at what interest rates?",
-            "What investment accounts do you have?",
-            "What is your risk tolerance?",
-            "What is the biggest financial risk you face right now?",
-        ],
-        "metrics": [
-            {"name": "income", "type": "objective", "unit": "AUD/month"},
-            {"name": "expenses", "type": "objective", "unit": "AUD/month"},
-            {"name": "savings_rate", "type": "objective", "unit": "percentage"},
-            {"name": "net_worth", "type": "objective", "unit": "AUD"},
-            {"name": "debt", "type": "objective", "unit": "AUD"},
-            {"name": "financial_confidence", "type": "subjective", "unit": "1-10"},
-        ],
-        "search_terms": ["money", "finance", "saving", "investing", "wealth", "budget", "debt", "income", "expenses", "net worth", "stocks", "compound interest"],
-    },
-    "health": {
-        "domain": "health",
-        "description": "Physical health, fitness, nutrition, sleep, and energy",
-        "stages": [
-            {"name": "exploring", "description": "Learning about health, assessing baseline"},
-            {"name": "planning", "description": "Setting targets, choosing approach"},
-            {"name": "executing", "description": "Following the plan, building habits"},
-            {"name": "reviewing", "description": "Reviewing progress, adjusting approach"},
-        ],
-        "diagnostic_questions": [
-            "What health outcome are you trying to improve?",
-            "What does your current routine look like?",
-            "What have you tried before? What worked and what didn't?",
-            "How will you measure progress?",
-            "What is the smallest change you could make this week?",
-            "What triggers cause you to fall off track?",
-            "Are there any constraints (injuries, time, equipment)?",
-            "What does your sleep look like?",
-        ],
-        "metrics": [
-            {"name": "weight", "type": "objective", "unit": "kg"},
-            {"name": "body_fat", "type": "objective", "unit": "percentage"},
-            {"name": "steps", "type": "objective", "unit": "count/day"},
-            {"name": "workouts", "type": "objective", "unit": "count/week"},
-            {"name": "sleep_hours", "type": "objective", "unit": "hours"},
-            {"name": "energy", "type": "subjective", "unit": "1-10"},
-        ],
-        "search_terms": ["health", "fitness", "exercise", "nutrition", "diet", "sleep", "weight", "strength", "muscle", "cardio", "habit"],
-    },
-    "career": {
-        "domain": "career",
-        "description": "Career development, job search, skills, and professional growth",
-        "stages": [
-            {"name": "exploring", "description": "Exploring options, unclear direction"},
-            {"name": "planning", "description": "Clear target role, building strategy"},
-            {"name": "executing", "description": "Actively applying, interviewing, shipping work"},
-            {"name": "reviewing", "description": "Reviewing results, adjusting approach"},
-        ],
-        "diagnostic_questions": [
-            "What role or career outcome are you aiming for?",
-            "What skills do you currently have?",
-            "What skills are you missing for your target?",
-            "What is your current application/interview pipeline?",
-            "What is working in your current approach?",
-            "What is not working?",
-            "How will you know when you've succeeded?",
-            "What is the smallest action you could take this week?",
-        ],
-        "metrics": [
-            {"name": "applications", "type": "objective", "unit": "count/week"},
-            {"name": "replies", "type": "objective", "unit": "count/week"},
-            {"name": "interviews", "type": "objective", "unit": "count/week"},
-            {"name": "projects_shipped", "type": "objective", "unit": "count"},
-            {"name": "skills_practiced", "type": "objective", "unit": "hours/week"},
-            {"name": "career_confidence", "type": "subjective", "unit": "1-10"},
-        ],
-        "search_terms": ["career", "job", "resume", "interview", "skills", "portfolio", "networking", "promotion", "salary"],
-    },
-    "happiness": {
-        "domain": "happiness",
-        "description": "Mental wellbeing, focus, relationships, and life satisfaction",
-        "stages": [
-            {"name": "exploring", "description": "Reflecting, not sure what to change"},
-            {"name": "planning", "description": "Identified area to improve, choosing approach"},
-            {"name": "executing", "description": "Practicing new habits or mindsets"},
-            {"name": "reviewing", "description": "Reflecting on progress, adjusting"},
-        ],
-        "diagnostic_questions": [
-            "What area of your wellbeing do you want to improve?",
-            "On a scale of 1-10, how would you rate this area right now?",
-            "What does a good day look like for you?",
-            "What triggers negative states?",
-            "What have you tried before?",
-            "What habits or routines currently support your wellbeing?",
-            "What would you like to feel more of?",
-            "What is the smallest thing that could improve this week?",
-        ],
-        "metrics": [
-            {"name": "mood", "type": "subjective", "unit": "1-10"},
-            {"name": "stress", "type": "subjective", "unit": "1-10"},
-            {"name": "focus", "type": "subjective", "unit": "1-10"},
-            {"name": "meditation_minutes", "type": "objective", "unit": "minutes/day"},
-            {"name": "gratitude_entries", "type": "objective", "unit": "count/day"},
-            {"name": "social_interactions", "type": "objective", "unit": "count/week"},
-        ],
-        "search_terms": ["happiness", "wellbeing", "mindfulness", "meditation", "stress", "focus", "gratitude", "relationships", "stoicism", "philosophy", "calm"],
-    },
-}
-
+def _get_seed_pack_paths():
+    """Returns paths to the default seed packs bundled with Psyche."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    packs_dir = os.path.join(base_dir, "psyche", "domain_packs")
+    if not os.path.exists(packs_dir):
+        # Fallback if running from a different root
+        packs_dir = os.path.join(base_dir, "domain_packs")
+    
+    if os.path.exists(packs_dir):
+        return [os.path.join(packs_dir, f) for f in os.listdir(packs_dir) if f.endswith(".yaml") or f.endswith(".json")]
+    return []
 
 def ensure_domain_packs():
-    """Creates the domains directory and seeds default YAML packs if they don't exist."""
+    """Creates the domains directory and seeds default packs if they don't exist."""
+    import shutil
     os.makedirs(DOMAINS_DIR, exist_ok=True)
-    try:
-        import yaml
-    except ImportError:
-        # Fallback to JSON if pyyaml not installed
-        for name, pack in SEED_PACKS.items():
-            path = os.path.join(DOMAINS_DIR, f"{name}.json")
-            if not os.path.exists(path):
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(pack, f, indent=2)
-        return
+    seed_paths = _get_seed_pack_paths()
+    for src in seed_paths:
+        filename = os.path.basename(src)
+        dst = os.path.join(DOMAINS_DIR, filename)
+        if not os.path.exists(dst):
+            shutil.copy2(src, dst)
 
-    for name, pack in SEED_PACKS.items():
-        path = os.path.join(DOMAINS_DIR, f"{name}.yaml")
-        json_path = os.path.join(DOMAINS_DIR, f"{name}.json")
-        if not os.path.exists(path) and not os.path.exists(json_path):
-            with open(path, "w", encoding="utf-8") as f:
-                yaml.dump(pack, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
 def load_domain_pack(domain):
@@ -258,14 +90,27 @@ def load_domain_pack(domain):
         return json.load(f)
 
 
+def _get_all_packs():
+    ensure_domain_packs()
+    packs = {}
+    for f in os.listdir(DOMAINS_DIR):
+        if f.endswith(".yaml") or f.endswith(".json"):
+            name = f.split(".")[0]
+            try:
+                packs[name] = load_domain_pack(name)
+            except Exception:
+                pass
+    return packs
+
+
 def detect_domain(query_text):
     """Detects the most relevant domain for a query by keyword matching against domain search_terms."""
-    ensure_domain_packs()
     query_lower = query_text.lower()
     best_domain = "general"
     best_score = 0
 
-    for domain_name, pack in SEED_PACKS.items():
+    packs = _get_all_packs()
+    for domain_name, pack in packs.items():
         if domain_name == "general":
             continue
         score = 0
@@ -289,7 +134,8 @@ RULES:
 2. Never give vague motivational advice. Be specific and actionable.
 3. Every recommendation must connect to a measurable metric or observable feedback signal.
 4. If the retrieved knowledge is insufficient, say so explicitly in missing_information.
-5. Output valid JSON matching the schema exactly. No markdown wrapping, no extra text.
+5. If there is no strong retrieved principle found, explicitly state: "No strong retrieved principle found." Do not force a connection.
+6. Output valid JSON matching the schema exactly. No markdown wrapping, no extra text.
 
 OUTPUT SCHEMA:
 {
@@ -450,13 +296,30 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
             cleaned = "\n".join(lines).strip()
         brief = json.loads(cleaned)
     except (json.JSONDecodeError, ValueError):
-        # Return raw text wrapped in a minimal structure
+        import re
+        
+        # Regex-based fallback template parsing
+        def extract(pattern, text, default=""):
+            m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            return m.group(1).strip() if m else default
+            
+        def extract_list(pattern, text):
+            block = extract(pattern, text)
+            if not block: return []
+            return [line.strip("- *").strip() for line in block.split("\n") if line.strip("- *")]
+
+        # Attempt to salvage the most important parts into a brief structure
         brief = {
             "domain": domain,
             "stage": "exploring",
             "goal": goal_text,
+            "next_action": extract(r"(?:next\s*action|action|step)[^:]*:?\s*([^\n]+)", cleaned, "Review the raw response below."),
+            "success_condition": extract(r"success[^:]*:?\s*([^\n]+)", cleaned, ""),
+            "failure_condition": extract(r"failure[^:]*:?\s*([^\n]+)", cleaned, ""),
+            "review_date": extract(r"review[^:]*:?\s*([\d-]+)", cleaned, review_date),
+            "relevant_principles": [{"principle": p, "source": "Retrieved Context"} for p in extract_list(r"principles?[\s\"*]*:?[\s\[]*\n(.*?)(?:\"?\s*,|\n\n|\Z)", cleaned) if p],
             "raw_response": raw_response,
-            "parse_error": "Could not parse LLM response as JSON. Raw response included above."
+            "parse_error": "Could not strictly parse LLM response as JSON. Showing best-effort extraction. Raw response is available below."
         }
 
     return brief
