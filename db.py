@@ -139,6 +139,86 @@ def init_db(db_path: str):
         )
     """)
     
+    # Create goals table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            stage TEXT DEFAULT 'exploring',
+            title TEXT NOT NULL,
+            description TEXT,
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    
+    # Create experiments table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS experiments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id INTEGER,
+            title TEXT NOT NULL,
+            hypothesis TEXT,
+            metric_name TEXT,
+            success_condition TEXT,
+            failure_condition TEXT,
+            start_date TEXT,
+            review_date TEXT,
+            status TEXT DEFAULT 'active',
+            outcome TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (goal_id) REFERENCES goals (id) ON DELETE SET NULL
+        )
+    """)
+    
+    # Create metric_logs table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS metric_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id INTEGER,
+            goal_id INTEGER,
+            metric_name TEXT NOT NULL,
+            value REAL NOT NULL,
+            unit TEXT,
+            note TEXT,
+            logged_at TEXT NOT NULL,
+            FOREIGN KEY (experiment_id) REFERENCES experiments (id) ON DELETE SET NULL,
+            FOREIGN KEY (goal_id) REFERENCES goals (id) ON DELETE SET NULL
+        )
+    """)
+    
+    # Create reviews table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id INTEGER,
+            goal_id INTEGER,
+            what_happened TEXT,
+            what_worked TEXT,
+            what_didnt TEXT,
+            lesson TEXT,
+            next_action TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (experiment_id) REFERENCES experiments (id) ON DELETE SET NULL,
+            FOREIGN KEY (goal_id) REFERENCES goals (id) ON DELETE SET NULL
+        )
+    """)
+    
+    # Create rules table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            rule_text TEXT NOT NULL,
+            source TEXT,
+            confidence TEXT DEFAULT 'tentative',
+            active INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -764,3 +844,183 @@ def sync_memories_hook(db_path: str):
         pass
 
 
+# ─── Guidance Layer CRUD ─────────────────────────────────────────────
+
+def add_goal(conn: sqlite3.Connection, domain: str, title: str, description: str = None, stage: str = 'exploring') -> int:
+    """Creates a new goal. Returns the goal ID."""
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    cursor.execute(
+        "INSERT INTO goals (domain, stage, title, description, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
+        (domain, stage, title, description, now, now)
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+def get_goals(conn: sqlite3.Connection, domain: str = None, status: str = 'active') -> list[dict]:
+    """Retrieves goals, optionally filtered by domain and status."""
+    cursor = conn.cursor()
+    query = "SELECT id, domain, stage, title, description, status, created_at, updated_at FROM goals WHERE 1=1"
+    params = []
+    if domain:
+        query += " AND domain = ?"
+        params.append(domain)
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY updated_at DESC"
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    return [{"id": r[0], "domain": r[1], "stage": r[2], "title": r[3], "description": r[4], "status": r[5], "created_at": r[6], "updated_at": r[7]} for r in rows]
+
+def update_goal(conn: sqlite3.Connection, goal_id: int, **kwargs):
+    """Updates a goal's fields. Accepts any combination of: domain, stage, title, description, status."""
+    allowed = {'domain', 'stage', 'title', 'description', 'status'}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    fields['updated_at'] = datetime.now(timezone.utc).isoformat()
+    set_clause = ', '.join(f'{k} = ?' for k in fields)
+    values = list(fields.values()) + [goal_id]
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE goals SET {set_clause} WHERE id = ?", values)
+    conn.commit()
+
+def add_experiment(conn: sqlite3.Connection, goal_id: int, title: str, hypothesis: str = None, metric_name: str = None, success_condition: str = None, failure_condition: str = None, start_date: str = None, review_date: str = None) -> int:
+    """Creates a new experiment linked to a goal. Returns the experiment ID."""
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    if not start_date:
+        start_date = now
+    cursor.execute(
+        "INSERT INTO experiments (goal_id, title, hypothesis, metric_name, success_condition, failure_condition, start_date, review_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+        (goal_id, title, hypothesis, metric_name, success_condition, failure_condition, start_date, review_date, now)
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+def get_experiments(conn: sqlite3.Connection, goal_id: int = None, status: str = 'active') -> list[dict]:
+    """Retrieves experiments, optionally filtered by goal and status."""
+    cursor = conn.cursor()
+    query = "SELECT id, goal_id, title, hypothesis, metric_name, success_condition, failure_condition, start_date, review_date, status, outcome, created_at FROM experiments WHERE 1=1"
+    params = []
+    if goal_id is not None:
+        query += " AND goal_id = ?"
+        params.append(goal_id)
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY created_at DESC"
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    return [{"id": r[0], "goal_id": r[1], "title": r[2], "hypothesis": r[3], "metric_name": r[4], "success_condition": r[5], "failure_condition": r[6], "start_date": r[7], "review_date": r[8], "status": r[9], "outcome": r[10], "created_at": r[11]} for r in rows]
+
+def update_experiment(conn: sqlite3.Connection, experiment_id: int, **kwargs):
+    """Updates an experiment's fields. Accepts: title, hypothesis, metric_name, success_condition, failure_condition, review_date, status, outcome."""
+    allowed = {'title', 'hypothesis', 'metric_name', 'success_condition', 'failure_condition', 'review_date', 'status', 'outcome'}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    set_clause = ', '.join(f'{k} = ?' for k in fields)
+    values = list(fields.values()) + [experiment_id]
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE experiments SET {set_clause} WHERE id = ?", values)
+    conn.commit()
+
+def add_metric_log(conn: sqlite3.Connection, metric_name: str, value: float, unit: str = None, note: str = None, experiment_id: int = None, goal_id: int = None) -> int:
+    """Logs a metric data point. Returns the log entry ID."""
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    cursor.execute(
+        "INSERT INTO metric_logs (experiment_id, goal_id, metric_name, value, unit, note, logged_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (experiment_id, goal_id, metric_name, value, unit, note, now)
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+def get_metric_logs(conn: sqlite3.Connection, metric_name: str = None, experiment_id: int = None, goal_id: int = None, limit: int = 50) -> list[dict]:
+    """Retrieves metric log entries, optionally filtered."""
+    cursor = conn.cursor()
+    query = "SELECT id, experiment_id, goal_id, metric_name, value, unit, note, logged_at FROM metric_logs WHERE 1=1"
+    params = []
+    if metric_name:
+        query += " AND metric_name = ?"
+        params.append(metric_name)
+    if experiment_id is not None:
+        query += " AND experiment_id = ?"
+        params.append(experiment_id)
+    if goal_id is not None:
+        query += " AND goal_id = ?"
+        params.append(goal_id)
+    query += " ORDER BY logged_at DESC LIMIT ?"
+    params.append(limit)
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    return [{"id": r[0], "experiment_id": r[1], "goal_id": r[2], "metric_name": r[3], "value": r[4], "unit": r[5], "note": r[6], "logged_at": r[7]} for r in rows]
+
+def add_review(conn: sqlite3.Connection, what_happened: str, what_worked: str = None, what_didnt: str = None, lesson: str = None, next_action: str = None, experiment_id: int = None, goal_id: int = None) -> int:
+    """Creates a review entry. Returns the review ID."""
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    cursor.execute(
+        "INSERT INTO reviews (experiment_id, goal_id, what_happened, what_worked, what_didnt, lesson, next_action, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (experiment_id, goal_id, what_happened, what_worked, what_didnt, lesson, next_action, now)
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+def get_reviews(conn: sqlite3.Connection, goal_id: int = None, experiment_id: int = None, limit: int = 10) -> list[dict]:
+    """Retrieves reviews, optionally filtered by goal or experiment."""
+    cursor = conn.cursor()
+    query = "SELECT id, experiment_id, goal_id, what_happened, what_worked, what_didnt, lesson, next_action, created_at FROM reviews WHERE 1=1"
+    params = []
+    if goal_id is not None:
+        query += " AND goal_id = ?"
+        params.append(goal_id)
+    if experiment_id is not None:
+        query += " AND experiment_id = ?"
+        params.append(experiment_id)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    return [{"id": r[0], "experiment_id": r[1], "goal_id": r[2], "what_happened": r[3], "what_worked": r[4], "what_didnt": r[5], "lesson": r[6], "next_action": r[7], "created_at": r[8]} for r in rows]
+
+def add_rule(conn: sqlite3.Connection, domain: str, rule_text: str, source: str = None, confidence: str = 'tentative') -> int:
+    """Creates a new personal rule. Returns the rule ID."""
+    cursor = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    cursor.execute(
+        "INSERT INTO rules (domain, rule_text, source, confidence, active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+        (domain, rule_text, source, confidence, now, now)
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+def get_rules(conn: sqlite3.Connection, domain: str = None, active: bool = True) -> list[dict]:
+    """Retrieves personal rules, optionally filtered by domain."""
+    cursor = conn.cursor()
+    query = "SELECT id, domain, rule_text, source, confidence, active, created_at, updated_at FROM rules WHERE 1=1"
+    params = []
+    if domain:
+        query += " AND domain = ?"
+        params.append(domain)
+    if active:
+        query += " AND active = 1"
+    query += " ORDER BY updated_at DESC"
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    return [{"id": r[0], "domain": r[1], "rule_text": r[2], "source": r[3], "confidence": r[4], "active": bool(r[5]), "created_at": r[6], "updated_at": r[7]} for r in rows]
+
+def update_rule(conn: sqlite3.Connection, rule_id: int, **kwargs):
+    """Updates a rule's fields. Accepts: domain, rule_text, source, confidence, active."""
+    allowed = {'domain', 'rule_text', 'source', 'confidence', 'active'}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    fields['updated_at'] = datetime.now(timezone.utc).isoformat()
+    set_clause = ', '.join(f'{k} = ?' for k in fields)
+    values = list(fields.values()) + [rule_id]
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE rules SET {set_clause} WHERE id = ?", values)
+    conn.commit()

@@ -465,6 +465,45 @@ def main():
                                 },
                                 "required": ["text"]
                             }
+                        },
+                        {
+                            "name": "generate_guidance",
+                            "description": "Generate a structured guidance brief from a goal or problem using knowledge retrieval and LLM context.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "goal_text": {
+                                        "type": "string",
+                                        "description": "The goal or problem to get guidance on (e.g. 'I want to save money')"
+                                    },
+                                    "domain": {
+                                        "type": "string",
+                                        "description": "Optional domain (e.g. 'wealth', 'health', 'business'). Auto-detected if omitted."
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["goal_text"]
+                            }
+                        },
+                        {
+                            "name": "list_goals_and_experiments",
+                            "description": "List active goals, experiments, and personal rules to understand current status.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "domain": {
+                                        "type": "string",
+                                        "description": "Optional domain to filter by (e.g. 'wealth', 'health')"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                }
+                            }
                         }
                     ]
                 }
@@ -532,6 +571,33 @@ def main():
                     topic = arguments.get("topic")
                     author = arguments.get("author", "Assistant")
                     text_result = append_memory_archival_tool(text, topic, author)
+                    resp["result"] = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": text_result
+                            }
+                        ]
+                    }
+                elif tool_name == "generate_guidance":
+                    goal_text = arguments.get("goal_text")
+                    domain = arguments.get("domain")
+                    topic = arguments.get("topic")
+                    from guidance import generate_guidance_tool
+                    text_result = generate_guidance_tool(goal_text, domain, topic)
+                    resp["result"] = {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": text_result
+                            }
+                        ]
+                    }
+                elif tool_name == "list_goals_and_experiments":
+                    domain = arguments.get("domain")
+                    topic = arguments.get("topic")
+                    from guidance import list_goals_experiments_tool
+                    text_result = list_goals_experiments_tool(domain, topic)
                     resp["result"] = {
                         "content": [
                             {

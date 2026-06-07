@@ -41,7 +41,8 @@ dependencies = [
     "fastembed>=0.3.0",
     "sqlite-vec>=0.1.9",
     "usearch>=2.25.3",
-    "flashrank>=0.2.10"
+    "flashrank>=0.2.10",
+    "pyyaml>=6.0.0"
 ]
 requires-python = ">=3.9"
 
@@ -49,4 +50,4 @@ requires-python = ">=3.9"
 psyche = "cli:main"
 
 [tool.setuptools]
-py-modules = ["cli", "db", "parsers", "ingest", "query", "llm_client", "build_graph", "mcp_server"]
+py-modules = ["cli", "db", "parsers", "ingest", "query", "llm_client", "build_graph", "mcp_server", "guidance"]

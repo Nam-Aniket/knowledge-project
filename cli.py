@@ -29,7 +29,7 @@ def main():
         os.environ["DATABASE_PATH"] = resolve_db_path(f"topic_{topic_name}.db")
 
     if len(sys.argv) < 2:
-        print("Usage: psyche [setup | ingest | query | chat | build-graph | start-mcp] [options]")
+        print("Usage: psyche [setup | ingest | query | chat | build-graph | guide | goal | experiment | log-metric | review | rules | compact-memory | start-mcp] [options]")
         sys.exit(1)
         
     subcommand = sys.argv[1].lower()
@@ -58,6 +58,24 @@ def main():
         import synthesis
         db_path = os.getenv("DATABASE_PATH")
         synthesis.compile_daily_logs(db_path_arg=db_path)
+    elif subcommand == "guide":
+        import guidance
+        guidance.main()
+    elif subcommand == "goal":
+        import guidance
+        guidance.goal_main()
+    elif subcommand == "experiment":
+        import guidance
+        guidance.experiment_main()
+    elif subcommand == "log-metric":
+        import guidance
+        guidance.log_metric_main()
+    elif subcommand == "review":
+        import guidance
+        guidance.review_main()
+    elif subcommand == "rules":
+        import guidance
+        guidance.rules_main()
     elif subcommand == "start-mcp":
         try:
             import mcp_server
@@ -67,7 +85,7 @@ def main():
             sys.exit(1)
     else:
         print(f"Unknown command: {subcommand}")
-        print("Available commands: setup, ingest, query, chat, build-graph, compact-memory, start-mcp")
+        print("Available commands: setup, ingest, query, chat, build-graph, guide, goal, experiment, log-metric, review, rules, compact-memory, start-mcp")
         sys.exit(1)
 
 if __name__ == "__main__":
