@@ -1,0 +1,51 @@
+domain: happiness
+description: Mental wellbeing, focus, relationships, and life satisfaction
+stages:
+  - name: exploring
+    description: Reflecting, not sure what to change
+  - name: planning
+    description: Identified area to improve, choosing approach
+  - name: executing
+    description: Practicing new habits or mindsets
+  - name: reviewing
+    description: Reflecting on progress, adjusting
+diagnostic_questions:
+  - What area of your wellbeing do you want to improve?
+  - On a scale of 1-10, how would you rate this area right now?
+  - What does a good day look like for you?
+  - What triggers negative states?
+  - What have you tried before?
+  - What habits or routines currently support your wellbeing?
+  - What would you like to feel more of?
+  - What is the smallest thing that could improve this week?
+metrics:
+  - name: mood
+    type: subjective
+    unit: 1-10
+  - name: stress
+    type: subjective
+    unit: 1-10
+  - name: focus
+    type: subjective
+    unit: 1-10
+  - name: meditation_minutes
+    type: objective
+    unit: minutes/day
+  - name: gratitude_entries
+    type: objective
+    unit: count/day
+  - name: social_interactions
+    type: objective
+    unit: count/week
+search_terms:
+  - happiness
+  - wellbeing
+  - mindfulness
+  - meditation
+  - stress
+  - focus
+  - gratitude
+  - relationships
+  - stoicism
+  - philosophy
+  - calm

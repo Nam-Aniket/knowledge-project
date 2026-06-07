@@ -159,8 +159,11 @@ class TestGuidanceLayer(unittest.TestCase):
         domain3 = guidance.detect_domain("My sleep hours are low")
         self.assertEqual(domain3, "health")
 
-        domain4 = guidance.detect_domain("Some completely random text")
-        self.assertEqual(domain4, "general")
+        domain4 = guidance.detect_domain("I want to brainstorm and prototype an idea")
+        self.assertEqual(domain4, "ideation")
+
+        domain5 = guidance.detect_domain("Some completely random text")
+        self.assertEqual(domain5, "general")
 
     @mock.patch('query.perform_hybrid_search')
     @mock.patch('query.retrieve_concept_context')
@@ -206,6 +209,34 @@ class TestGuidanceLayer(unittest.TestCase):
         self.assertEqual(brief["rule_suggestions"], ["Keep emails short"])
         mock_hybrid_search.assert_called_once()
         mock_retrieve_concept.assert_called_once()
+
+    @mock.patch('guidance.LLMClient')
+    def test_generate_guidance_fallback_parsing(self, mock_llm_class):
+        """Test fallback parser if LLM outputs poorly formatted JSON."""
+        mock_llm = mock.Mock()
+        mock_llm.provider = "mock"
+        mock_llm.chat_model = "mock-model"
+        
+        # Simulate LLM returning conversational text wrapped around a fake schema
+        bad_response = '''
+        Sure! Here is your guidance:
+        Next Action: Build a prototype
+        Success Condition: It works
+        Review Date: 2026-06-20
+        '''
+        mock_llm.generate_completion.return_value = bad_response
+        
+        brief = guidance.generate_guidance_brief(
+            goal_text="Test idea",
+            domain="ideation",
+            db_path=self.db_path,
+            llm=mock_llm
+        )
+        self.assertEqual(brief["domain"], "ideation")
+        self.assertEqual(brief["next_action"], "Build a prototype")
+        self.assertEqual(brief["success_condition"], "It works")
+        self.assertEqual(brief["review_date"], "2026-06-20")
+        self.assertIn("Could not strictly parse", brief["parse_error"])
 
     @mock.patch('guidance.LLMClient')
     @mock.patch('guidance.generate_guidance_brief')

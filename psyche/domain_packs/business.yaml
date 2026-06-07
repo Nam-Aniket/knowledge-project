@@ -1,0 +1,49 @@
+domain: business
+description: Business development, sales, revenue, and growth
+stages:
+  - name: exploring
+    description: Researching market, no product/service yet
+  - name: planning
+    description: Building strategy, validating idea
+  - name: executing
+    description: Actively selling, iterating on product
+  - name: reviewing
+    description: Reviewing metrics, adjusting strategy
+diagnostic_questions:
+  - What specific outcome are you trying to achieve?
+  - Who is your target customer?
+  - What have you already tried?
+  - What is your current conversion rate or key metric?
+  - What is the biggest obstacle to growth right now?
+  - How will you know if this is working?
+  - What assumptions are you making about the market?
+  - What is the smallest next experiment you could run?
+metrics:
+  - name: outreach_count
+    type: objective
+    unit: count/week
+  - name: reply_rate
+    type: objective
+    unit: percentage
+  - name: calls_booked
+    type: objective
+    unit: count/week
+  - name: revenue
+    type: objective
+    unit: AUD/month
+  - name: retention_rate
+    type: objective
+    unit: percentage
+  - name: confidence
+    type: subjective
+    unit: 1-10
+search_terms:
+  - business
+  - sales
+  - revenue
+  - customer
+  - marketing
+  - growth
+  - funnel
+  - outreach
+  - startup

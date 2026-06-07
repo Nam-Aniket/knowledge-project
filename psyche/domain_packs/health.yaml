@@ -1,0 +1,51 @@
+domain: health
+description: Physical health, fitness, nutrition, sleep, and energy
+stages:
+  - name: exploring
+    description: Learning about health, assessing baseline
+  - name: planning
+    description: Setting targets, choosing approach
+  - name: executing
+    description: Following the plan, building habits
+  - name: reviewing
+    description: Reviewing progress, adjusting approach
+diagnostic_questions:
+  - What health outcome are you trying to improve?
+  - What does your current routine look like?
+  - What have you tried before? What worked and what didn't?
+  - How will you measure progress?
+  - What is the smallest change you could make this week?
+  - What triggers cause you to fall off track?
+  - Are there any constraints (injuries, time, equipment)?
+  - What does your sleep look like?
+metrics:
+  - name: weight
+    type: objective
+    unit: kg
+  - name: body_fat
+    type: objective
+    unit: percentage
+  - name: steps
+    type: objective
+    unit: count/day
+  - name: workouts
+    type: objective
+    unit: count/week
+  - name: sleep_hours
+    type: objective
+    unit: hours
+  - name: energy
+    type: subjective
+    unit: 1-10
+search_terms:
+  - health
+  - fitness
+  - exercise
+  - nutrition
+  - diet
+  - sleep
+  - weight
+  - strength
+  - muscle
+  - cardio
+  - habit

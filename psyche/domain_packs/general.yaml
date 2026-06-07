@@ -1,0 +1,22 @@
+domain: general
+description: General-purpose decision making and problem solving
+stages:
+  - name: exploring
+    description: Gathering information, no clear plan yet
+  - name: planning
+    description: Clear goal, building strategy
+  - name: executing
+    description: Active execution, measuring results
+  - name: reviewing
+    description: Reviewing outcomes, extracting lessons
+diagnostic_questions:
+  - What specific outcome are you trying to achieve?
+  - What have you already tried?
+  - What is the biggest obstacle right now?
+  - How will you know if this is working? What would you measure?
+  - What is the smallest next action you could take?
+  - What is the worst realistic outcome if this fails?
+  - What knowledge or information are you missing?
+  - What assumptions are you making?
+metrics: []
+search_terms: []
