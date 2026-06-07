@@ -32,26 +32,36 @@ At the end of any session:
 
 ## 🏗️ System Architecture Core
 
-* **`db.py`**: SQLite database gateway. Manages document schemas, FTS5 triggers, concept maps, and proper noun extraction.
+* **`db.py`**: SQLite database gateway. Manages document schemas, FTS5 triggers, concept maps, proper noun extraction, and the **Guidance Layer tables/CRUD** (goals, experiments, metric_logs, reviews, rules).
 * **`ingest.py`**: Chunks markdown/books/PDFs recursively, strips YAML/wikilinks, calculates lexical features, and queues texts for embeddings.
 * **`query.py`**: Implements hybrid search combining SQLite FTS5 (BM25) and vector cosine similarity via Reciprocal Rank Fusion (RRF), followed by Lightweight CPU Cross-Encoder reranking (`flashrank`).
-* **`mcp_server.py`**: Implements Model Context Protocol endpoints (`search_knowledge` and `retrieve_graph`) to expose the search index to editors and LLMs.
+* **`guidance.py`**: Core guidance engine. Manages domain question packs (YAML), handles domain detection, generates structured briefs using hybrid search + concept graph + LLM, and formats briefs for terminal display.
+* **`mcp_server.py`**: Implements Model Context Protocol endpoints exposing knowledge search (`search_knowledge`, `retrieve_graph`), session memory, and guidance tools (`generate_guidance`, `list_goals_and_experiments`) to editors and LLMs.
 
 ---
 
 ## 🎯 Active Objectives & State
 
-1. **GitHub Growth Strategy**: Optimize and promote the Psyche repository.
+1. **Guidance Layer & Personal Upgrade (Hermes Upgrade)**:
+   * **Completed**: Added SQLite schemas, domain question packs (YAML) in `~/.psyche/domains/`, CLI subcommands, new MCP server tools (`generate_guidance`, `list_goals_and_experiments`), and a comprehensive unit test suite (`tests/test_guidance.py`).
+   * **State**: Verified and passing all tests. Ready for production usage.
+2. **GitHub Growth & Promoters**:
    * Focus on developer marketing, repository README clarity, and optimizing Smithery/NPM integrations to maximize stars and visibility.
-2. **Local Memory Integration (Hermes Loop)**:
+3. **Local Memory Integration (Hermes Loop)**:
    * Keep this `MEMORY.md` file updated.
    * Monitor sync loop using the `/Users/aniketnamjoshi/Obsidian/AgentLogs` folder and `/Users/aniketnamjoshi/.psyche/watcher.log`.
-3. **Decoupled Text Retrieval**:
-   * Separate chunk texts from embedding vectors during retrieval, keeping memory load under 5MB (completed in recent refactoring).
 
 ---
 
 ## 📜 Chronological Learning Log
+
+### 2026-06-08: Psyche Guidance Layer & Personal Upgrade
+* **Feature**: Designed and implemented the Psyche Guidance Layer to evolve Psyche into a knowledge-guided decision/experiment tracking system.
+* **Design Decisions**:
+  * **Domain packs**: Seed domain question packs stored as YAML files in `~/.psyche/domains/` for easy sharing, versioning, and editing.
+  * **Co-location**: Guidance tables (goals, experiments, metric logs, reviews, rules) are stored inside the same topic/default SQLite databases. This preserves the single-file profile/topic replication model and makes queries simple and fast.
+  * **MCP Tools**: Added `generate_guidance` and `list_goals_and_experiments` to `mcp_server.py` to allow AI assistants to directly interact with the decision loop.
+  * **Verification**: Added `tests/test_guidance.py` covering schema creation, CRUD helpers, domain pack loading, keyword domain detection, brief generation, and MCP wrapper endpoints. All 45 project tests are passing.
 
 ### 2026-06-05: Shared Memory Loop Verification
 * **Discovery/Issue**: Investigated why the watched `AgentLogs` folder was empty despite the watcher system being configured.
