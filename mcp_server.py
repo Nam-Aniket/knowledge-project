@@ -6,6 +6,8 @@ import os
 os.environ["PSYCHE_NONINTERACTIVE"] = "1"
 
 import json
+import hashlib
+import re
 import traceback
 
 # Save real stdout and redirect standard output to stderr
@@ -15,13 +17,25 @@ sys.stdout = sys.stderr
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, resolve_db_path, check_and_migrate_embeddings
+from db import get_connection, get_all_embeddings_with_chunks, resolve_db_path, check_and_migrate_embeddings, index_path_for
 from query import perform_hybrid_search, format_context, retrieve_concept_context
 from llm_client import LLMClient
 
 def log(msg):
     sys.stderr.write(f"[Psyche MCP] {msg}\n")
     sys.stderr.flush()
+
+def resolve_topic_db_path(topic=None):
+    """Resolves the database path for an optional topic, validating the topic name.
+
+    A topic must contain only alphanumeric characters, underscores, or hyphens to
+    prevent path traversal or injection via the topic_<topic>.db filename.
+    """
+    if topic and not re.fullmatch(r"[A-Za-z0-9_-]+", topic):
+        raise ValueError(f"Invalid topic name: {topic!r}")
+    if topic:
+        return resolve_db_path(f"topic_{topic}.db")
+    return resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
 
 def search_knowledge_tool(query_text, topic=None, top=5):
     import numpy as np
@@ -34,19 +48,15 @@ def search_knowledge_tool(query_text, topic=None, top=5):
         top = 5
         
     # Resolve db path
-    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
-    if topic:
-        db_path = resolve_db_path(f"topic_{topic}.db")
+    db_path = resolve_topic_db_path(topic)
         
     if not os.path.exists(db_path):
-        return f"Error: Database for topic '{topic or 'default'}' not found at '{db_path}'."
+        raise RuntimeError(f"Error: Database for topic '{topic or 'default'}' not found at '{db_path}'.")
         
     try:
         # Initialize LLM Client
         llm = LLMClient()
         check_and_migrate_embeddings(db_path, llm)
-        from db import sync_memories_hook
-        sync_memories_hook(db_path)
     except Exception as e:
         log(f"Failed to initialize LLM or migrate database: {e}. Falling back to offline mode.")
         class FakeLLM:
@@ -54,39 +64,38 @@ def search_knowledge_tool(query_text, topic=None, top=5):
             embed_model = "none"
         llm = FakeLLM()
         
-    # Fetch only IDs and embeddings
+    # Try loading the usearch index FIRST; the full embeddings matrix is only a
+    # numpy fallback used when the index is absent.
     records = []
-    if llm.provider != "none":
-        conn = get_connection(db_path)
-        try:
-            records = get_all_embeddings_only(conn)
-        finally:
-            conn.close()
-            
-    chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
-    valid_embeddings = [r["embedding"] for r in records if r["embedding"] is not None]
-    if valid_embeddings:
-        embeddings_matrix = np.vstack(valid_embeddings)
-    else:
-        embeddings_matrix = np.array([], dtype=np.float32)
-        
-    # Load usearch index if available
+    chunk_ids = np.array([], dtype=np.int32)
+    embeddings_matrix = np.array([], dtype=np.float32)
     usearch_index = None
     if llm.provider != "none":
+        index_path = index_path_for(db_path)
         try:
             from usearch.index import Index
-            index_path = db_path.replace(".db", "") + ".usearch"
             if os.path.exists(index_path):
-                if len(records) > 0 and embeddings_matrix.size > 0:
-                    dim = embeddings_matrix.shape[1]
-                    usearch_index = Index(ndim=dim, metric="cosine")
-                    usearch_index.load(index_path)
+                usearch_index = Index.restore(index_path)
         except Exception:
             usearch_index = None
-            
-    if len(records) == 0 and llm.provider != "none":
+
+        if usearch_index is None:
+            # No index: fall back to loading all embeddings into a numpy matrix.
+            conn = get_connection(db_path)
+            try:
+                records = get_all_embeddings_only(conn)
+            finally:
+                conn.close()
+            chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
+            valid_embeddings = [r["embedding"] for r in records if r["embedding"] is not None]
+            if valid_embeddings:
+                embeddings_matrix = np.vstack(valid_embeddings)
+
+    # If no index and no embeddings loaded, the database has nothing to search.
+    if usearch_index is None and len(records) == 0 and llm.provider != "none":
         return "Database is empty. Please ingest some documents first."
-        
+
+
     similarities = perform_hybrid_search(
         db_path=db_path,
         query_text=query_text,
@@ -112,12 +121,10 @@ def search_knowledge_tool(query_text, topic=None, top=5):
     return result
 
 def retrieve_graph_tool(topic=None):
-    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
-    if topic:
-        db_path = resolve_db_path(f"topic_{topic}.db")
+    db_path = resolve_topic_db_path(topic)
         
     if not os.path.exists(db_path):
-        return f"Error: Database for topic '{topic or 'default'}' not found."
+        raise RuntimeError(f"Error: Database for topic '{topic or 'default'}' not found.")
         
     conn = get_connection(db_path)
     try:
@@ -136,7 +143,7 @@ def retrieve_graph_tool(topic=None):
         """)
         links = cursor.fetchall()
     except Exception as e:
-        return f"Error reading concept graph: {e}"
+        raise RuntimeError(f"Error reading concept graph: {e}")
     finally:
         conn.close()
         
@@ -159,9 +166,7 @@ def retrieve_graph_tool(topic=None):
 
 def record_interaction_tool(session_id: str, role: str, content: str, tool_calls: str = None, topic: str = None):
     from datetime import datetime, timezone
-    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
-    if topic:
-        db_path = resolve_db_path(f"topic_{topic}.db")
+    db_path = resolve_topic_db_path(topic)
         
     conn = get_connection(db_path)
     try:
@@ -174,15 +179,13 @@ def record_interaction_tool(session_id: str, role: str, content: str, tool_calls
         conn.commit()
         return f"Successfully recorded interaction for session '{session_id}'."
     except Exception as e:
-        return f"Error recording interaction: {e}"
+        raise RuntimeError(f"Error recording interaction: {e}")
     finally:
         conn.close()
 
 def write_memory_core_tool(key: str, value: str, category: str = "general", topic: str = None):
     from datetime import datetime, timezone
-    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
-    if topic:
-        db_path = resolve_db_path(f"topic_{topic}.db")
+    db_path = resolve_topic_db_path(topic)
         
     conn = get_connection(db_path)
     try:
@@ -198,28 +201,27 @@ def write_memory_core_tool(key: str, value: str, category: str = "general", topi
         conn.commit()
         return f"Core memory updated successfully: {key} -> '{value}'"
     except Exception as e:
-        return f"Error writing core memory: {e}"
+        raise RuntimeError(f"Error writing core memory: {e}")
     finally:
         conn.close()
 
 def append_memory_archival_tool(text: str, topic: str = None, author: str = "Assistant"):
     from datetime import datetime, timezone
     from db import add_source, add_chunk, add_embedding, update_usearch_index_incrementally
-    
-    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
-    if topic:
-        db_path = resolve_db_path(f"topic_{topic}.db")
+
+    db_path = resolve_topic_db_path(topic)
         
+    llm = LLMClient()
+    if llm.provider == "none":
+        raise RuntimeError("Error: Cannot write archival memory while running in AI-Free mode.")
+
     conn = get_connection(db_path)
     try:
-        llm = LLMClient()
-        if llm.provider == "none":
-            return "Error: Cannot write archival memory while running in AI-Free mode."
-            
         vector = llm.get_embedding(text)
         
         # Add source, chunk and embedding
-        checksum = f"dynamic_{hash(text)}_{datetime.now(timezone.utc).timestamp()}"
+        timestamp = datetime.now(timezone.utc).timestamp()
+        checksum = "dynamic_" + hashlib.sha256(f"{text}{timestamp}".encode()).hexdigest()
         source_id = add_source(conn, f"Dynamic Agent Memory ({topic or 'default'})", author, "dynamic_memory", checksum)
         chunk_id = add_chunk(conn, source_id, 0, text, location="dynamic_memory_mcp")
         add_embedding(conn, chunk_id, vector)
@@ -236,7 +238,7 @@ def append_memory_archival_tool(text: str, topic: str = None, author: str = "Ass
         
         return f"Successfully saved to archival memory (Chunk ID: {chunk_id})."
     except Exception as e:
-        return f"Error writing archival memory: {e}"
+        raise RuntimeError(f"Error writing archival memory: {e}")
     finally:
         conn.close()
 
@@ -511,106 +513,110 @@ def main():
                 params = req.get("params", {})
                 tool_name = params.get("name")
                 arguments = params.get("arguments", {})
-                
-                if tool_name == "search_knowledge":
-                    q = arguments.get("query")
-                    topic = arguments.get("topic")
-                    top = arguments.get("top", 5)
-                    
-                    text_result = search_knowledge_tool(q, topic, top)
-                    resp["result"] = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": text_result
-                            }
-                        ]
-                    }
-                elif tool_name == "retrieve_graph":
-                    topic = arguments.get("topic")
-                    text_result = retrieve_graph_tool(topic)
-                    resp["result"] = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": text_result
-                            }
-                        ]
-                    }
-                elif tool_name == "record_interaction":
-                    session_id = arguments.get("session_id")
-                    role = arguments.get("role")
-                    content = arguments.get("content")
-                    tool_calls = arguments.get("tool_calls")
-                    topic = arguments.get("topic")
-                    text_result = record_interaction_tool(session_id, role, content, tool_calls, topic)
-                    resp["result"] = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": text_result
-                            }
-                        ]
-                    }
-                elif tool_name == "write_memory_core":
-                    key = arguments.get("key")
-                    value = arguments.get("value")
-                    category = arguments.get("category", "general")
-                    topic = arguments.get("topic")
-                    text_result = write_memory_core_tool(key, value, category, topic)
-                    resp["result"] = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": text_result
-                            }
-                        ]
-                    }
-                elif tool_name == "append_memory_archival":
-                    text = arguments.get("text")
-                    topic = arguments.get("topic")
-                    author = arguments.get("author", "Assistant")
-                    text_result = append_memory_archival_tool(text, topic, author)
-                    resp["result"] = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": text_result
-                            }
-                        ]
-                    }
-                elif tool_name == "generate_guidance":
-                    goal_text = arguments.get("goal_text")
-                    domain = arguments.get("domain")
-                    topic = arguments.get("topic")
-                    from guidance import generate_guidance_tool
-                    text_result = generate_guidance_tool(goal_text, domain, topic)
-                    resp["result"] = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": text_result
-                            }
-                        ]
-                    }
-                elif tool_name == "list_goals_and_experiments":
-                    domain = arguments.get("domain")
-                    topic = arguments.get("topic")
-                    from guidance import list_goals_experiments_tool
-                    text_result = list_goals_experiments_tool(domain, topic)
-                    resp["result"] = {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": text_result
-                            }
-                        ]
-                    }
-                else:
-                    resp["error"] = {
-                        "code": -32601,
-                        "message": f"Tool '{tool_name}' not found."
-                    }
+
+                try:
+                    if tool_name == "search_knowledge":
+                        q = arguments.get("query")
+                        topic = arguments.get("topic")
+                        top = arguments.get("top", 5)
+
+                        text_result = search_knowledge_tool(q, topic, top)
+                        resp["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text_result
+                                }
+                            ]
+                        }
+                    elif tool_name == "retrieve_graph":
+                        topic = arguments.get("topic")
+                        text_result = retrieve_graph_tool(topic)
+                        resp["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text_result
+                                }
+                            ]
+                        }
+                    elif tool_name == "record_interaction":
+                        session_id = arguments.get("session_id")
+                        role = arguments.get("role")
+                        content = arguments.get("content")
+                        tool_calls = arguments.get("tool_calls")
+                        topic = arguments.get("topic")
+                        text_result = record_interaction_tool(session_id, role, content, tool_calls, topic)
+                        resp["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text_result
+                                }
+                            ]
+                        }
+                    elif tool_name == "write_memory_core":
+                        key = arguments.get("key")
+                        value = arguments.get("value")
+                        category = arguments.get("category", "general")
+                        topic = arguments.get("topic")
+                        text_result = write_memory_core_tool(key, value, category, topic)
+                        resp["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text_result
+                                }
+                            ]
+                        }
+                    elif tool_name == "append_memory_archival":
+                        text = arguments.get("text")
+                        topic = arguments.get("topic")
+                        author = arguments.get("author", "Assistant")
+                        text_result = append_memory_archival_tool(text, topic, author)
+                        resp["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text_result
+                                }
+                            ]
+                        }
+                    elif tool_name == "generate_guidance":
+                        goal_text = arguments.get("goal_text")
+                        domain = arguments.get("domain")
+                        topic = arguments.get("topic")
+                        from guidance import generate_guidance_tool
+                        text_result = generate_guidance_tool(goal_text, domain, topic)
+                        resp["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text_result
+                                }
+                            ]
+                        }
+                    elif tool_name == "list_goals_and_experiments":
+                        domain = arguments.get("domain")
+                        topic = arguments.get("topic")
+                        from guidance import list_goals_experiments_tool
+                        text_result = list_goals_experiments_tool(domain, topic)
+                        resp["result"] = {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text_result
+                                }
+                            ]
+                        }
+                    else:
+                        resp["error"] = {
+                            "code": -32601,
+                            "message": f"Tool '{tool_name}' not found."
+                        }
+                except Exception as e:
+                    log(f"Tool '{tool_name}' failed: {traceback.format_exc()}")
+                    resp["result"] = {"content": [{"type": "text", "text": f"Error: {e}"}], "isError": True}
             else:
                 if req_id is not None:
                     resp["error"] = {

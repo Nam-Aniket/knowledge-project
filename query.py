@@ -16,7 +16,7 @@ from prompt_toolkit.completion import WordCompleter
 # Ensure current directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db import get_connection, get_all_embeddings_with_chunks, search_fts, resolve_db_path, check_and_migrate_embeddings, get_all_embeddings_only, get_chunks_by_ids, search_fts_ids, search_vector_vec
+from db import get_connection, get_all_embeddings_with_chunks, search_fts, resolve_db_path, check_and_migrate_embeddings, get_all_embeddings_only, get_chunks_by_ids, search_fts_ids, search_vector_vec, index_path_for
 from llm_client import LLMClient
 
 # Initialize rich console
@@ -466,36 +466,33 @@ def main():
         console.print("")
         sys.exit(0)
         
-    # Fetch only IDs and embeddings if not in AI-free mode
+    # Try loading the usearch index FIRST; the full embeddings matrix is only a
+    # numpy fallback used when the index is absent.
     records = []
-    if llm.provider != "none":
-        conn = get_connection(db_path)
-        try:
-            records = get_all_embeddings_only(conn)
-        finally:
-            conn.close()
-            
-    chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
-    valid_embeddings = [r["embedding"] for r in records if r["embedding"] is not None]
-    if valid_embeddings:
-        embeddings_matrix = np.vstack(valid_embeddings)
-    else:
-        embeddings_matrix = np.array([], dtype=np.float32)
-        
-    # Load usearch index if available
+    chunk_ids = np.array([], dtype=np.int32)
+    embeddings_matrix = np.array([], dtype=np.float32)
     usearch_index = None
     if llm.provider != "none":
+        index_path = index_path_for(db_path)
         try:
             from usearch.index import Index
-            index_path = db_path.replace(".db", "") + ".usearch"
             if os.path.exists(index_path):
-                if len(records) > 0 and embeddings_matrix.size > 0:
-                    dim = embeddings_matrix.shape[1]
-                    usearch_index = Index(ndim=dim, metric="cosine")
-                    usearch_index.load(index_path)
+                usearch_index = Index.restore(index_path)
         except Exception:
             usearch_index = None
-        
+
+        if usearch_index is None:
+            # No index: fall back to loading all embeddings into a numpy matrix.
+            conn = get_connection(db_path)
+            try:
+                records = get_all_embeddings_only(conn)
+            finally:
+                conn.close()
+            chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
+            valid_embeddings = [r["embedding"] for r in records if r["embedding"] is not None]
+            if valid_embeddings:
+                embeddings_matrix = np.vstack(valid_embeddings)
+
     system_instruction = (
         "You are a helpful knowledge assistant. Synthesize a detailed, clear answer based on "
         "the retrieved context chunks below. You must ground your answers strictly in the "
@@ -566,7 +563,7 @@ def main():
                     console.print(f"  [bold]Provider:[/bold] {llm.provider.upper()}")
                     console.print(f"  [bold]Embedding Model:[/bold] {llm.embed_model}")
                     console.print(f"  [bold]Chat Model:[/bold] {llm.chat_model}")
-                    console.print(f"  [bold]Chunks Loaded:[/bold] {len(records)}\n")
+                    console.print(f"  [bold]Chunks Loaded:[/bold] {total_chunks}\n")
                     continue
                 else:
                     console.print(f"[bold red]Unknown command:[/bold red] {clean_input}. Type [bold]/help[/bold] for instructions.\n")
