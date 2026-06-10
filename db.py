@@ -3,6 +3,16 @@ import os
 import numpy as np
 from datetime import datetime, timezone
 
+# Current schema version. Bump this whenever the schema changes and append a
+# matching (version, callable) pair to MIGRATIONS below.
+SCHEMA_VERSION = 1
+
+# Ordered list of (target_version, migration_callable) pairs. Each callable
+# receives an open sqlite3.Connection and upgrades the schema to target_version.
+# Version 1 is the current baseline schema (created idempotently in init_db),
+# so there are no migrations yet.
+MIGRATIONS = []
+
 def resolve_db_path(db_path: str = None) -> str:
     """Resolves relative database paths to ~/.psyche/ folder, while leaving absolute paths intact."""
     if not db_path:
@@ -223,8 +233,42 @@ def init_db(db_path: str):
         )
     """)
     
+    # Apply schema versioning / migrations now that all tables exist.
+    _run_migrations(conn)
+
     conn.commit()
     conn.close()
+
+def _run_migrations(conn: sqlite3.Connection):
+    """Stamps fresh databases with the current SCHEMA_VERSION and applies any
+    pending migrations to bring an older database up to date.
+
+    Runs inside the caller's transaction; the caller is responsible for the
+    final commit.
+    """
+    current = get_metadata(conn, "schema_version")
+    current = int(current) if current is not None else 0
+
+    if current == 0:
+        # Fresh DB (or pre-versioning DB) — the current schema is already
+        # created idempotently above, so just stamp it.
+        set_metadata(conn, "schema_version", str(SCHEMA_VERSION))
+        return
+
+    if current > SCHEMA_VERSION:
+        print(
+            f"Warning: database schema_version ({current}) is newer than this "
+            f"Psyche supports ({SCHEMA_VERSION}). This DB was likely written by "
+            f"a newer Psyche; continuing, but some features may misbehave."
+        )
+        return
+
+    if current < SCHEMA_VERSION:
+        for version, migrate in sorted(MIGRATIONS, key=lambda m: m[0]):
+            if version > current:
+                migrate(conn)
+                set_metadata(conn, "schema_version", str(version))
+                current = version
 
 def get_connection(db_path: str) -> sqlite3.Connection:
     """Returns a connection to the SQLite database with sqlite-vec loaded if available."""
