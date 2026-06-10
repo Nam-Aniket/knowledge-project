@@ -265,13 +265,17 @@ def add_source(conn: sqlite3.Connection, title: str, author: str | None, file_pa
     conn.commit()
     return cursor.lastrowid
 
-def remove_source(conn: sqlite3.Connection, source_id: int):
-    """Deletes a source and all associated chunks, embeddings, and virtual table indexes."""
+def remove_source(conn: sqlite3.Connection, source_id: int, db_path: str | None = None):
+    """Deletes a source and all associated chunks, embeddings, and virtual table indexes.
+
+    Also purges the corresponding keys from the USearch HNSW index so it stays in
+    sync with SQLite. If db_path is not supplied, it is derived from the connection.
+    """
     cursor = conn.cursor()
-    # Get all chunk IDs first to clean up virtual tables
+    # Get all chunk IDs first to clean up virtual tables and the USearch index
     cursor.execute("SELECT id FROM chunks WHERE source_id = ?", (source_id,))
     chunk_ids = [row[0] for row in cursor.fetchall()]
-    
+
     if chunk_ids:
         placeholders = ",".join("?" for _ in chunk_ids)
         # Delete from chunks_fts
@@ -281,10 +285,67 @@ def remove_source(conn: sqlite3.Connection, source_id: int):
             cursor.execute(f"DELETE FROM vec_chunks WHERE chunk_id IN ({placeholders})", chunk_ids)
         except sqlite3.OperationalError:
             pass
-            
+
     # Delete from sources (will cascade delete chunks and embeddings)
     cursor.execute("DELETE FROM sources WHERE id = ?", (source_id,))
     conn.commit()
+
+    # Purge the removed chunk_ids from the USearch index so it doesn't return stale keys.
+    if chunk_ids:
+        _remove_keys_from_usearch_index(conn, chunk_ids, db_path)
+
+
+def _remove_keys_from_usearch_index(conn: sqlite3.Connection, chunk_ids: list[int], db_path: str | None = None):
+    """Removes the given chunk_id keys from the on-disk USearch index, if it exists."""
+    try:
+        from usearch.index import Index
+    except ImportError:
+        return
+
+    # Derive the db path from the connection if not provided.
+    if not db_path:
+        try:
+            row = conn.execute("PRAGMA database_list").fetchone()
+            db_path = row[2] if row else None
+        except sqlite3.Error:
+            db_path = None
+    if not db_path:
+        return
+
+    resolved_path = resolve_db_path(db_path)
+    index_path = index_path_for(resolved_path)
+    if not os.path.exists(index_path):
+        return
+
+    try:
+        index = Index.restore(index_path)
+        if index is None or len(index) == 0:
+            return
+        # Only remove keys actually present (usearch can segfault on missing keys).
+        present = [k for k in chunk_ids if k in index]
+        if not present:
+            return
+        keys_arr = np.array(present, dtype=np.int64)
+        try:
+            index.remove(keys_arr)
+        except Exception:
+            # Batch remove may raise; fall back to per-key removal.
+            for key in present:
+                try:
+                    index.remove(np.int64(key))
+                except Exception:
+                    pass
+        # If the index is now empty, delete the file rather than persisting an
+        # empty index: usearch can segfault when an emptied index is reloaded and
+        # added to. A fresh index is rebuilt lazily on the next add. This mirrors
+        # build_or_update_usearch_index, which also removes the file when no rows.
+        if len(index) == 0:
+            os.remove(index_path)
+        else:
+            index.save(index_path)
+    except Exception as e:
+        import sys
+        sys.stderr.write(f"[Psyche] Warning: Could not purge keys from USearch index ({e})\n")
 
 def add_chunk(conn: sqlite3.Connection, source_id: int, chunk_index: int, text: str, location: str | None = None) -> int:
     """Adds a chunk of text to the database with location metadata and indexes it in FTS5. Returns the chunk ID."""
@@ -799,7 +860,18 @@ def update_usearch_index_incrementally(db_path: str, chunk_id: int, vector: list
     vectors_matrix = np.array([vector], dtype=np.float32)
     if len(vectors_matrix.shape) == 1:
         vectors_matrix = np.expand_dims(vectors_matrix, axis=0)
-        
+
+    # Remove any existing entry for this key first so re-adds are idempotent
+    # (re-ingest reuses keys; usearch.add() would otherwise orphan the old vector).
+    # Guard against an empty index: usearch can segfault on remove() when size==0,
+    # and only attempt removal when the key is actually present.
+    try:
+        if len(index) > 0 and chunk_id in index:
+            index.remove(keys_arr)
+    except Exception:
+        # Removing a non-existent key may raise; that's fine.
+        pass
+
     index.add(keys_arr, vectors_matrix)
     
     # Save back to disk
