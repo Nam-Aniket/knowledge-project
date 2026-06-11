@@ -18,7 +18,7 @@ sys.stdout = sys.stderr
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from db import get_connection, get_all_embeddings_with_chunks, resolve_db_path, check_and_migrate_embeddings, index_path_for
-from query import perform_hybrid_search, format_context, retrieve_concept_context
+from query import perform_hybrid_search, format_context, retrieve_concept_context, prewarm_reranker
 from llm_client import LLMClient
 
 def log(msg):
@@ -244,7 +244,11 @@ def append_memory_archival_tool(text: str, topic: str = None, author: str = "Ass
 
 def main():
     log("Server starting on stdio transport...")
-    
+
+    # Pre-warm the reranker model so the first search request does not pay the
+    # model load cost inside the tool call (which can trip client timeouts).
+    prewarm_reranker()
+
     while True:
         try:
             line = sys.stdin.readline()
@@ -506,6 +510,131 @@ def main():
                                     }
                                 }
                             }
+                        },
+                        {
+                            "name": "add_memory",
+                            "description": "Store a durable atomic fact (user preference, decision, lesson, or stable project fact) in cross-agent memory. Near-duplicates are skipped automatically.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "fact": {
+                                        "type": "string",
+                                        "description": "One self-contained sentence stating the fact"
+                                    },
+                                    "category": {
+                                        "type": "string",
+                                        "description": "One of: preference, decision, fact, lesson"
+                                    },
+                                    "entities": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Optional entity names the fact mentions (tools, projects, people)"
+                                    },
+                                    "agent_id": {
+                                        "type": "string",
+                                        "description": "Optional originating agent (e.g. 'claude-desktop', 'codex')"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["fact"]
+                            }
+                        },
+                        {
+                            "name": "search_memories",
+                            "description": "Hybrid search over stored atomic memory facts. Returns a compact bullet list of relevant facts, or nothing when no strong match exists.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": "What to look up (e.g. the task at hand)"
+                                    },
+                                    "top": {
+                                        "type": "integer",
+                                        "description": "Max facts to return (default 8)",
+                                        "default": 8
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "get_memory",
+                            "description": "Fetch one atomic memory fact by id, including entities and scope metadata.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "memory_id": {
+                                        "type": "integer",
+                                        "description": "The memory id"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["memory_id"]
+                            }
+                        },
+                        {
+                            "name": "update_memory",
+                            "description": "Rewrite the text of an existing atomic memory fact (re-embeds and re-indexes it).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "memory_id": {
+                                        "type": "integer",
+                                        "description": "The memory id"
+                                    },
+                                    "fact": {
+                                        "type": "string",
+                                        "description": "The corrected fact text"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["memory_id", "fact"]
+                            }
+                        },
+                        {
+                            "name": "delete_memory",
+                            "description": "Permanently delete an atomic memory fact by id.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "memory_id": {
+                                        "type": "integer",
+                                        "description": "The memory id"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["memory_id"]
+                            }
+                        },
+                        {
+                            "name": "list_entities",
+                            "description": "List entities mentioned across stored atomic memories with fact counts.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                }
+                            }
                         }
                     ]
                 }
@@ -609,6 +738,65 @@ def main():
                                 }
                             ]
                         }
+                    elif tool_name == "add_memory":
+                        import memzero
+                        db_path = resolve_topic_db_path(arguments.get("topic"))
+                        result = memzero.add_memory(
+                            fact=arguments.get("fact"),
+                            category=arguments.get("category"),
+                            entities=arguments.get("entities"),
+                            agent_id=arguments.get("agent_id"),
+                            db_path=db_path,
+                        )
+                        if result["duplicate_of"] is not None:
+                            text_result = f"Skipped: near-duplicate of existing memory #{result['duplicate_of']}."
+                        else:
+                            text_result = f"Stored memory #{result['id']}: {result['fact']}"
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
+                    elif tool_name == "search_memories":
+                        import memzero
+                        db_path = resolve_topic_db_path(arguments.get("topic"))
+                        results = memzero.search_memories(
+                            arguments.get("query"),
+                            top=int(arguments.get("top", 8) or 8),
+                            db_path=db_path,
+                        )
+                        if results:
+                            lines = [f"- [#{r['id']}] {r['fact']}" + (f" ({r['category']})" if r['category'] else "")
+                                     for r in results]
+                            text_result = "\n".join(lines)
+                        else:
+                            text_result = "No relevant memories found."
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
+                    elif tool_name == "get_memory":
+                        import memzero
+                        db_path = resolve_topic_db_path(arguments.get("topic"))
+                        result = memzero.get_memory(int(arguments.get("memory_id")), db_path=db_path)
+                        text_result = json.dumps(result, indent=2) if result else "Memory not found."
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
+                    elif tool_name == "update_memory":
+                        import memzero
+                        db_path = resolve_topic_db_path(arguments.get("topic"))
+                        ok = memzero.update_memory(
+                            int(arguments.get("memory_id")), arguments.get("fact"), db_path=db_path
+                        )
+                        text_result = "Memory updated." if ok else "Memory not found."
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
+                    elif tool_name == "delete_memory":
+                        import memzero
+                        db_path = resolve_topic_db_path(arguments.get("topic"))
+                        ok = memzero.delete_memory(int(arguments.get("memory_id")), db_path=db_path)
+                        text_result = "Memory deleted." if ok else "Memory not found."
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
+                    elif tool_name == "list_entities":
+                        import memzero
+                        db_path = resolve_topic_db_path(arguments.get("topic"))
+                        entities = memzero.list_entities(db_path=db_path)
+                        if entities:
+                            text_result = "\n".join(f"- {e['entity']} ({e['count']})" for e in entities)
+                        else:
+                            text_result = "No entities recorded yet."
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
                     else:
                         resp["error"] = {
                             "code": -32601,

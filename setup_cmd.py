@@ -277,17 +277,19 @@ def setup_background_watcher(project_root):
     watch_dir = os.path.abspath(os.path.expanduser(watch_dir))
     os.makedirs(watch_dir, exist_ok=True)
     
-    # Save watch path to .env
-    env_path = os.path.join(project_root, ".env")
-    if os.path.exists(env_path):
-        try:
+    # Save watch path to ~/.psyche/.env (survives package updates)
+    env_path = os.path.join(home, ".psyche", ".env")
+    try:
+        os.makedirs(os.path.dirname(env_path), exist_ok=True)
+        content = ""
+        if os.path.exists(env_path):
             with open(env_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            if "WATCH_PATH=" not in content:
-                with open(env_path, "a", encoding="utf-8") as f:
-                    f.write(f"WATCH_PATH={watch_dir}\n")
-        except Exception:
-            pass
+        if "WATCH_PATH=" not in content:
+            with open(env_path, "a", encoding="utf-8") as f:
+                f.write(f"WATCH_PATH={watch_dir}\n")
+    except Exception:
+        pass
 
     if sys.platform == "darwin":
         setup_macos_watcher(project_root, watch_dir)
@@ -412,8 +414,9 @@ def run_wizard_phase():
     if project_root not in sys.path:
         sys.path.append(project_root)
         
-    from llm_client import run_setup_wizard
-    env_path = os.path.join(project_root, ".env")
+    from llm_client import run_setup_wizard, resolve_env_path
+    # Write keys to ~/.psyche/.env so they survive package updates.
+    env_path = resolve_env_path()
     run_setup_wizard(env_path)
 
 def install_git_post_commit_hook(project_root):

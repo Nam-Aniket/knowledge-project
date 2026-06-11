@@ -47,6 +47,18 @@ def get_ranker():
     _ranker_loaded = True
     return _ranker
 
+def prewarm_reranker():
+    """Eagerly triggers the lazy reranker initialization (model download/load).
+
+    Intended to be called once at server startup so the first MCP search does
+    not pay the model load cost inside the tool call (which can cause client
+    timeouts). Failures are non-fatal — search falls back to RRF.
+    """
+    try:
+        get_ranker()
+    except Exception as e:
+        print(f"prewarm_reranker: failed to initialize reranker ({e})", file=sys.stderr)
+
 def calculate_similarities(query_vector: list[float] | np.ndarray, chunk_records: list[dict]) -> list[tuple[dict, float]]:
     """Calculates cosine similarity between query embedding and all chunk embeddings."""
     q_vec = np.array(query_vector, dtype=np.float32)
@@ -189,22 +201,33 @@ def perform_hybrid_search(db_path: str, query_text: str, chunk_ids: np.ndarray, 
     # 5. Apply local Cross-Encoder reranking if ranker is available
     if ranker is not None and records:
         try:
+            # Cap candidates sent to the reranker — cross-encoder cost grows
+            # linearly with passage count, and the top RRF candidates are the
+            # only ones that realistically survive reranking. The remainder is
+            # appended afterwards in original (RRF) order as a fallback tail.
+            RERANK_CANDIDATE_CAP = 30
+            rerank_records = records[:RERANK_CANDIDATE_CAP]
+            tail_records = records[RERANK_CANDIDATE_CAP:]
+
             passages = []
-            for r in records:
+            for r in rerank_records:
                 passages.append({
                     "id": r["chunk_id"],
                     "text": r["text"],
                     "meta": r
                 })
-                
+
             from flashrank import RerankRequest
             req = RerankRequest(query=query_text, passages=passages)
             reranked = ranker.rerank(req)
-            
+
             results = []
-            for item in reranked[:limit]:
+            for item in reranked:
                 results.append((item["meta"], float(item["score"])))
-            return results
+            # Append the un-reranked tail in original order, scored by RRF.
+            for r in tail_records:
+                results.append((r, scores_map[r["chunk_id"]]))
+            return results[:limit]
         except Exception as rerank_err:
             console.print(f"[dim]Note: Reranking failed, falling back to RRF. ({rerank_err})[/dim]")
             
