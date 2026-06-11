@@ -29,7 +29,7 @@ def main():
         os.environ["DATABASE_PATH"] = resolve_db_path(f"topic_{topic_name}.db")
 
     if len(sys.argv) < 2:
-        print("Usage: psyche [setup | ingest | query | chat | build-graph | guide | checkin | goal | experiment | log-metric | review | rules | compact-memory | start-mcp] [options]")
+        print("Usage: psyche [setup | ingest | query | chat | build-graph | guide | checkin | goal | experiment | log-metric | review | rules | compact-memory | connect | mem | start-mcp] [options]")
         sys.exit(1)
         
     subcommand = sys.argv[1].lower()
@@ -79,6 +79,15 @@ def main():
     elif subcommand == "rules":
         import guidance
         guidance.rules_main()
+    elif subcommand == "connect":
+        import connect
+        import argparse
+        ap = argparse.ArgumentParser(prog="psyche connect")
+        ap.add_argument("client", choices=["claude-code", "codex", "gemini", "antigravity"])
+        ap.add_argument("--dry-run", action="store_true")
+        a = ap.parse_args()
+        for line in connect.connect(a.client, dry_run=a.dry_run):
+            print(line)
     elif subcommand == "start-mcp":
         try:
             import mcp_server
@@ -88,7 +97,7 @@ def main():
             sys.exit(1)
     else:
         print(f"Unknown command: {subcommand}")
-        print("Available commands: setup, ingest, query, chat, build-graph, guide, checkin, goal, experiment, log-metric, review, rules, compact-memory, start-mcp")
+        print("Available commands: setup, ingest, query, chat, build-graph, guide, checkin, goal, experiment, log-metric, review, rules, compact-memory, connect, mem, start-mcp")
         sys.exit(1)
 
 if __name__ == "__main__":
