@@ -486,6 +486,11 @@ def main():
                                         "type": "string",
                                         "description": "Optional domain (e.g. 'wealth', 'health', 'business'). Auto-detected if omitted."
                                     },
+                                    "apply": {
+                                        "type": "boolean",
+                                        "description": "If true, create goal+experiment records from the plan.",
+                                        "default": False
+                                    },
                                     "topic": {
                                         "type": "string",
                                         "description": "Optional topic/profile database name."
@@ -716,7 +721,7 @@ def main():
                         domain = arguments.get("domain")
                         topic = arguments.get("topic")
                         from guidance import generate_guidance_tool
-                        text_result = generate_guidance_tool(goal_text, domain, topic)
+                        text_result = generate_guidance_tool(goal_text, domain, topic, apply=arguments.get("apply", False))
                         resp["result"] = {
                             "content": [
                                 {

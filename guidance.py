@@ -391,6 +391,42 @@ def retrieval_only_brief(goal_text, domain, db_path, llm=None):
     return plan
 
 
+def materialize_plan(plan: dict, db_path: str) -> dict:
+    """Persists a plan: creates one goal (from plan['goal']/domain), and one
+    experiment per action (title=action, success_condition=success_criterion,
+    review_date=today+due_offset_days, metric_name from action.metric.name).
+    All records share a generated plan_id.
+    Returns {'plan_id', 'goal_id', 'experiment_ids': [...]}."""
+    from db import add_goal, add_experiment
+
+    plan_id = "plan_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    today = datetime.now(timezone.utc)
+    conn = get_connection(db_path)
+    try:
+        goal_id = add_goal(
+            conn, plan.get("domain", "general"), plan["goal"],
+            description=plan.get("diagnosis"), stage="planning",
+        )
+        conn.execute("UPDATE goals SET plan_id = ? WHERE id = ?", (plan_id, goal_id))
+
+        experiment_ids = []
+        for action in plan.get("actions", []):
+            review_date = (today + timedelta(days=action.get("due_offset_days", 7))).strftime("%Y-%m-%d")
+            exp_id = add_experiment(
+                conn, goal_id, action["action"],
+                hypothesis=plan.get("diagnosis"),
+                metric_name=(action.get("metric") or {}).get("name"),
+                success_condition=action.get("success_criterion"),
+                review_date=review_date,
+            )
+            conn.execute("UPDATE experiments SET plan_id = ? WHERE id = ?", (plan_id, exp_id))
+            experiment_ids.append(exp_id)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"plan_id": plan_id, "goal_id": goal_id, "experiment_ids": experiment_ids}
+
+
 def format_brief_for_display(brief):
     """Renders an actionable plan as rich-formatted terminal output."""
     lines = []
@@ -464,6 +500,7 @@ def main():
     parser.add_argument("goal", nargs="?", help="The goal or problem to get guidance on.")
     parser.add_argument("--domain", "-d", help="Domain (e.g., business, health, wealth, career, happiness). Auto-detected if omitted.")
     parser.add_argument("--db-path", help="Database file path override.")
+    parser.add_argument("--apply", action="store_true", help="Create goal+experiment records from the generated plan.")
     args = parser.parse_args()
 
     if not args.goal:
@@ -498,6 +535,14 @@ def main():
 
     output = format_brief_for_display(brief)
     console.print(Panel(output, title="[bold]Guidance Brief[/bold]", border_style="cyan", padding=(1, 2)))
+
+    if args.apply and brief.get("actions"):
+        result = materialize_plan(brief, db_path)
+        console.print(
+            f"[bold green]✔ Plan materialized:[/bold green] goal #{result['goal_id']}, "
+            f"experiments {result['experiment_ids']} (plan {result['plan_id']})"
+        )
+        console.print(f"[dim]Check in later with: psyche checkin {result['goal_id']}[/dim]")
     console.print("")
 
 
@@ -824,7 +869,7 @@ def rules_main():
 
 # ─── MCP Tool Handlers ───────────────────────────────────────────────────────
 
-def generate_guidance_tool(goal_text, domain=None, topic=None):
+def generate_guidance_tool(goal_text, domain=None, topic=None, apply=False):
     """MCP tool handler for generating a guidance brief."""
     db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
     if topic:
@@ -845,6 +890,8 @@ def generate_guidance_tool(goal_text, domain=None, topic=None):
 
     try:
         brief = generate_guidance_brief(goal_text, domain, db_path, llm)
+        if apply and brief.get("actions"):
+            brief["_materialized"] = materialize_plan(brief, db_path)
         return json.dumps(brief, indent=2)
     except Exception as e:
         return f"Error generating guidance brief: {e}"

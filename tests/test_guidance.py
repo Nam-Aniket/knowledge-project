@@ -265,6 +265,35 @@ class TestGuidanceLayer(unittest.TestCase):
             self.assertIn(action["horizon"], VALID_HORIZONS)
             self.assertIsInstance(action["due_offset_days"], int)
 
+    def test_materialize_creates_records(self):
+        """materialize_plan persists one goal + one experiment per action under a shared plan_id."""
+        plan = _valid_plan_json("Improve outreach reply rate", "business")
+        plan["actions"].append({
+            "action": "Clean the prospect list of bounced addresses",
+            "horizon": "this_month",
+            "time_estimate_min": 60,
+            "success_criterion": "Bounce rate below 1%",
+            "due_offset_days": 14,
+        })
+        result = guidance.materialize_plan(plan, self.db_path)
+
+        goals = self.conn.execute(
+            "SELECT id, plan_id FROM goals WHERE plan_id = ?", (result["plan_id"],)
+        ).fetchall()
+        self.assertEqual(len(goals), 1)
+
+        experiments = self.conn.execute(
+            "SELECT title, success_condition, metric_name, review_date FROM experiments WHERE plan_id = ?",
+            (result["plan_id"],),
+        ).fetchall()
+        self.assertEqual(len(experiments), 3)
+        by_title = {e[0]: e for e in experiments}
+        first = by_title["A/B test two subject lines on 50 emails"]
+        self.assertEqual(first[1], "Both variants sent to 25 recipients each")
+        self.assertEqual(first[2], "reply_rate")
+        for e in experiments:
+            datetime.strptime(e[3], "%Y-%m-%d")
+
     def test_retrieval_only_when_no_chat(self):
         """No chat model: retrieval-only brief, generate_completion never called."""
         mock_llm = mock.Mock()
