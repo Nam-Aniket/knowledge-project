@@ -57,6 +57,40 @@ Rather than treating RAG as a static, read-only search engine, Psyche implements
 2.  **Core Memory (RAM)**: Key-value facts and project guidelines (e.g. coding preferences, styling choices, naming rules) that the agent writes and reads dynamically (`write_memory_core`).
 3.  **Archival Memory (Disk)**: Vector-embedded logs, learnings, and debugging context that the agent archives for long-term reference (`append_memory_archival`).
 4.  **Interaction History (Recall)**: Stateful logging of conversation turns to ensure context persistence across assistant sessions (`record_interaction`).
+5.  **Atomic Memory (Cross-Agent Facts)**: Deduplicated, one-sentence facts with agent/run scope and entity links, hybrid-retrieved and injected into your coding agents automatically (`add_memory`, `search_memories`, `update_memory`, `delete_memory`, `list_entities`). See the next section.
+
+---
+
+## 🔁 Atomic Memory: One Brain Across Claude Code, Codex & Antigravity
+
+> **Your AI assistant has amnesia. You've been paying for it — in tokens — every single session.**
+
+Every new session, your coding agent re-reads the same files to rediscover your conventions, re-asks about preferences you stated last week, and repeats mistakes it already made. You pay for that re-derivation in tokens, latency, and patience — typically **10,000–40,000 redundant tokens per session** on a recurring project.
+
+Psyche's atomic memory layer ends that. It is a mem0-class memory engine — extraction, deduplication, hybrid retrieval, entity links — that runs entirely on your machine, costs $0, and is shared by **every agent you use**. A preference you state in Codex is known to Claude Code. A lesson learned in Antigravity follows you everywhere.
+
+| | The old way | With Psyche atomic memory |
+|---|---|---|
+| Session start | Agent rediscovers context from scratch | ~1.5 KB of standing facts injected automatically |
+| Each prompt | You re-explain, agent re-reads | Up to ~800 tokens of *relevant* facts — only when a strong match exists, never noise |
+| Session end | Everything is forgotten | Durable facts extracted and stored, zero tokens billed to your agent |
+| Your data | Re-uploaded to a hosted memory SaaS | Never leaves your disk |
+| Cross-agent | Each tool has its own silo | One shared local store for all of them |
+
+The mechanics that make it free and fast:
+*   ✂️ **ADD-only writes with a cosine duplicate guard** — no per-fact LLM judging loops burning API calls; conflicts resolve at read time by recency.
+*   🎯 **Similarity-gated injection** — weak matches inject *nothing*. A session-level ledger guarantees a fact is never injected twice. Memory that wastes tokens isn't memory, it's noise.
+*   🔍 **Three-signal retrieval** — HNSW vector search + FTS5 keywords + entity matching, fused with RRF. The same retrieval stack that powers `search_knowledge`, on a dedicated facts index that never pollutes your document search.
+
+### Per-agent integration
+
+*   🤖 **Claude Code — fully automatic (hooks).** Lifecycle hooks inject standing facts at session start, search memories on every prompt, and extract new facts at session end. The model spends **zero** tool schemas and zero turns on memory — the harness does it all.
+*   ⌨️ **Codex — MCP + `AGENTS.md` protocol.** Codex calls `search_memories` at task start and `add_memory` when you state preferences or decisions, guided by a drop-in protocol block in `~/.codex/AGENTS.md`.
+*   🛸 **Antigravity — MCP + global rules.** Same protocol via `~/.gemini/GEMINI.md`; the shared `~/.gemini/config/mcp_config.json` covers the IDE, CLI, and Antigravity 2.0 in one entry.
+*   💬 **Claude Desktop / Cursor — MCP tools.** Six memory tools (`add_memory`, `search_memories`, `get_memory`, `update_memory`, `delete_memory`, `list_entities`) on the same Psyche server you already have configured.
+
+> [!NOTE]
+> Search and injection run on local ONNX embeddings out of the box. Automatic fact *extraction* from transcripts activates when a chat model is configured (`psyche setup` — a free Gemini key or local Ollama both work). Without one, facts accumulate through the explicit `add_memory` tool — and everything else works identically.
 
 ---
 
@@ -107,8 +141,19 @@ Configure Ollama (`llama3` + `nomic-embed-text`) during the setup wizard to quer
 npx psyche setup
 ```
 
-### 🧠 Use Psyche as memory for Codex / Antigravity
-Create a `MEMORY.md` file in your repository instructing your agent to call Psyche's memory write-back tools to document and retrieve codebase conventions.
+### 🧠 Give Claude Code automatic memory (hooks)
+Wire the three bundled hook scripts into `~/.claude/settings.json` so facts flow in and out of sessions with zero model overhead:
+```json
+"hooks": {
+  "SessionStart":     [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_session_start.py", "timeout": 15}]}],
+  "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_prompt_submit.py", "timeout": 15}]}],
+  "PreCompact":       [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_extract.py", "timeout": 60}]}],
+  "SessionEnd":       [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_extract.py", "timeout": 60}]}]
+}
+```
+
+### 🤝 Share one memory across Codex and Antigravity
+With the Psyche MCP server registered in `~/.codex/config.toml` and `~/.gemini/config/mcp_config.json`, drop the memory protocol block ([docs/memory-protocol.md](docs/memory-protocol.md)) into `~/.codex/AGENTS.md` and `~/.gemini/GEMINI.md`. Both agents will then read and write the same fact store Claude Code uses.
 
 ---
 

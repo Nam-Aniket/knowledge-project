@@ -5,13 +5,50 @@ from datetime import datetime, timezone
 
 # Current schema version. Bump this whenever the schema changes and append a
 # matching (version, callable) pair to MIGRATIONS below.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+
+def _create_atomic_memory_tables(conn: sqlite3.Connection):
+    """Creates the atomic memory tables (v2). Idempotent; shared by init_db
+    and the v1->v2 migration."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS atomic_memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fact TEXT NOT NULL,
+            agent_id TEXT,
+            run_id TEXT,
+            category TEXT,
+            embedding_blob BLOB,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            superseded_by INTEGER
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memory_entities (
+            memory_id INTEGER NOT NULL,
+            entity TEXT NOT NULL,
+            PRIMARY KEY (memory_id, entity),
+            FOREIGN KEY (memory_id) REFERENCES atomic_memories (id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS atomic_memories_fts USING fts5(
+            memory_id UNINDEXED,
+            fact
+        )
+    """)
+
+
+def _migrate_v2_atomic_memories(conn: sqlite3.Connection):
+    _create_atomic_memory_tables(conn)
+
 
 # Ordered list of (target_version, migration_callable) pairs. Each callable
 # receives an open sqlite3.Connection and upgrades the schema to target_version.
-# Version 1 is the current baseline schema (created idempotently in init_db),
-# so there are no migrations yet.
-MIGRATIONS = []
+# Version 1 is the baseline schema (created idempotently in init_db).
+MIGRATIONS = [(2, _migrate_v2_atomic_memories)]
 
 def resolve_db_path(db_path: str = None) -> str:
     """Resolves relative database paths to ~/.psyche/ folder, while leaving absolute paths intact."""
@@ -233,6 +270,9 @@ def init_db(db_path: str):
         )
     """)
     
+    # Create atomic memory tables (v2 schema)
+    _create_atomic_memory_tables(conn)
+
     # Apply schema versioning / migrations now that all tables exist.
     _run_migrations(conn)
 
