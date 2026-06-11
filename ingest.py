@@ -145,7 +145,7 @@ def main():
             if existing_id is not None:
                 if args.force:
                     console.print(f"[yellow]🔄 Re-ingesting (forced): {os.path.basename(path)}[/yellow]")
-                    remove_source(conn, existing_id)
+                    remove_source(conn, existing_id, db_path=db_path)
                 else:
                     console.print(f"[dim]⏭️  Skipping (already ingested): {os.path.basename(path)}[/dim]")
                     skipped_count += 1
