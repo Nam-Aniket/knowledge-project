@@ -18,7 +18,7 @@ sys.stdout = sys.stderr
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from db import get_connection, get_all_embeddings_with_chunks, resolve_db_path, check_and_migrate_embeddings, index_path_for
-from query import perform_hybrid_search, format_context, retrieve_concept_context
+from query import perform_hybrid_search, format_context, retrieve_concept_context, prewarm_reranker
 from llm_client import LLMClient
 
 def log(msg):
@@ -244,7 +244,11 @@ def append_memory_archival_tool(text: str, topic: str = None, author: str = "Ass
 
 def main():
     log("Server starting on stdio transport...")
-    
+
+    # Pre-warm the reranker model so the first search request does not pay the
+    # model load cost inside the tool call (which can trip client timeouts).
+    prewarm_reranker()
+
     while True:
         try:
             line = sys.stdin.readline()

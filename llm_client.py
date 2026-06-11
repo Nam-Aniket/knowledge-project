@@ -1,5 +1,6 @@
 import os
 import sys
+import shutil
 import requests
 from dotenv import load_dotenv
 from rich.console import Console
@@ -8,8 +9,41 @@ from rich.console import Console
 console = Console()
 err_console = Console(stderr=True)
 
-# Load environment variables
-load_dotenv()
+
+def resolve_env_path() -> str:
+    """Resolves the location of the .env file holding API keys / config.
+
+    Resolution order:
+      1. ~/.psyche/.env (preferred — survives npm updates, lives outside the
+         installed package directory).
+      2. Legacy package-dir .env (back-compat). If found there while
+         ~/.psyche/.env does not exist, it is migrated once to ~/.psyche/.env.
+
+    Returns the path that should be used for reads and writes (~/.psyche/.env).
+    """
+    psyche_dir = os.path.expanduser("~/.psyche")
+    primary_path = os.path.join(psyche_dir, ".env")
+    legacy_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+    if not os.path.exists(primary_path) and os.path.exists(legacy_path):
+        # One-time migration of an existing user's keys.
+        try:
+            os.makedirs(psyche_dir, exist_ok=True)
+            shutil.copy2(legacy_path, primary_path)
+            print("Migrated .env to ~/.psyche/.env")
+        except Exception:
+            # If the copy fails, fall back to using the legacy path directly.
+            return legacy_path
+
+    return primary_path
+
+
+# Load environment variables (prefer ~/.psyche/.env, migrating legacy if needed)
+_env_path = resolve_env_path()
+if os.path.exists(_env_path):
+    load_dotenv(_env_path)
+else:
+    load_dotenv()
 
 def check_and_run_setup():
     """Checks if .env is missing or unconfigured and runs an interactive setup wizard if needed."""
@@ -17,7 +51,7 @@ def check_and_run_setup():
     if "unittest" in sys.modules or os.getenv("TESTING") == "true" or os.getenv("PSYCHE_NONINTERACTIVE") == "1" or not sys.stdin.isatty():
         return
         
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    env_path = resolve_env_path()
     if os.path.exists(env_path):
         load_dotenv(env_path, override=True)
         provider = os.getenv("LLM_PROVIDER")
@@ -76,6 +110,9 @@ def run_setup_wizard(env_path: str):
         
     # Write .env file
     try:
+        env_dir = os.path.dirname(env_path)
+        if env_dir:
+            os.makedirs(env_dir, exist_ok=True)
         with open(env_path, "w") as f:
             f.write(f"# Configured via Setup Wizard\n")
             f.write(f"LLM_PROVIDER={provider}\n")

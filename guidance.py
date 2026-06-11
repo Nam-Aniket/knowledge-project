@@ -35,6 +35,13 @@ err_console = Console(stderr=True)
 
 DOMAINS_DIR = os.path.expanduser("~/.psyche/domains")
 
+# Cache of parsed domain packs keyed by pack file path → (mtime, parsed_dict).
+# Avoids re-reading/re-parsing YAML/JSON on every guidance call.
+_PACK_CACHE = {}
+
+# Whether ensure_domain_packs has already run its seed-copy loop this process.
+_PACKS_SEEDED = False
+
 def _get_seed_pack_paths():
     """Returns paths to the default seed packs bundled with Psyche."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -48,7 +55,13 @@ def _get_seed_pack_paths():
     return []
 
 def ensure_domain_packs():
-    """Creates the domains directory and seeds default packs if they don't exist."""
+    """Creates the domains directory and seeds default packs if they don't exist.
+
+    The seed-copy loop only runs once per process; subsequent calls are no-ops.
+    """
+    global _PACKS_SEEDED
+    if _PACKS_SEEDED:
+        return
     import shutil
     os.makedirs(DOMAINS_DIR, exist_ok=True)
     seed_paths = _get_seed_pack_paths()
@@ -57,7 +70,34 @@ def ensure_domain_packs():
         dst = os.path.join(DOMAINS_DIR, filename)
         if not os.path.exists(dst):
             shutil.copy2(src, dst)
+    _PACKS_SEEDED = True
 
+
+def _load_pack_file(pack_path):
+    """Reads and parses a pack file, caching by path and re-parsing only when
+    the file's mtime changes."""
+    try:
+        mtime = os.path.getmtime(pack_path)
+    except OSError:
+        mtime = None
+
+    cached = _PACK_CACHE.get(pack_path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
+    with open(pack_path, "r", encoding="utf-8") as f:
+        if pack_path.endswith(".yaml"):
+            try:
+                import yaml
+                parsed = yaml.safe_load(f)
+            except ImportError:
+                f.seek(0)
+                parsed = json.load(f)
+        else:
+            parsed = json.load(f)
+
+    _PACK_CACHE[pack_path] = (mtime, parsed)
+    return parsed
 
 
 def load_domain_pack(domain):
@@ -80,14 +120,7 @@ def load_domain_pack(domain):
         # Return built-in general pack
         return SEED_PACKS["general"]
 
-    with open(pack_path, "r", encoding="utf-8") as f:
-        if pack_path.endswith(".yaml"):
-            try:
-                import yaml
-                return yaml.safe_load(f)
-            except ImportError:
-                pass
-        return json.load(f)
+    return _load_pack_file(pack_path)
 
 
 def _get_all_packs():
