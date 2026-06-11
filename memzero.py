@@ -454,13 +454,19 @@ def search_memories(query: str, agent_id: str = None, top: int = 8,
     return results
 
 
-def format_facts(results: list[dict], max_chars: int = 3000) -> str:
-    """Formats facts as compact bullets for context injection."""
+def format_facts(results: list[dict], max_chars: int = 3000, include_date: bool = True) -> str:
+    """Formats facts as compact bullets for context injection.
+
+    include_date=False omits the date from the suffix (cache-stable rendering).
+    """
     lines = []
     total = 0
     for r in results:
-        date = (r.get("updated_at") or "")[:10]
-        suffix = f" ({r['category']}, {date})" if r.get("category") else (f" ({date})" if date else "")
+        if include_date:
+            date = (r.get("updated_at") or "")[:10]
+            suffix = f" ({r['category']}, {date})" if r.get("category") else (f" ({date})" if date else "")
+        else:
+            suffix = f" ({r['category']})" if r.get("category") else ""
         line = f"- {r['fact']}{suffix}"
         if total + len(line) > max_chars:
             break
@@ -671,10 +677,14 @@ def ledger_summary(path: str = None) -> dict:
     }
 
 
-def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None) -> list[dict]:
-    """Recent durable preference/decision/lesson facts for session-start
-    injection. With a project, returns that project's facts plus globals,
-    project facts first."""
+def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None,
+                       stable: bool = False) -> list[dict]:
+    """Durable preference/decision/lesson facts for session-start injection.
+
+    stable=True orders by id ASC (cache-stable; new facts append, existing
+    order never changes). stable=False keeps the legacy updated_at DESC order.
+    With a project, project facts are listed before globals in both modes.
+    """
     resolved = resolve_db_path(db_path)
     if not os.path.exists(resolved):
         return []
@@ -689,9 +699,15 @@ def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None) 
             if project:
                 sql += "AND (project = ? OR project IS NULL) "
                 params.append(project)
-                sql += "ORDER BY (project IS NULL), updated_at DESC LIMIT ?"
+                if stable:
+                    sql += "ORDER BY (project IS NULL), id ASC LIMIT ?"
+                else:
+                    sql += "ORDER BY (project IS NULL), updated_at DESC LIMIT ?"
             else:
-                sql += "ORDER BY updated_at DESC LIMIT ?"
+                if stable:
+                    sql += "ORDER BY id ASC LIMIT ?"
+                else:
+                    sql += "ORDER BY updated_at DESC LIMIT ?"
             params.append(top)
             rows = conn.execute(sql, params).fetchall()
         except sqlite3.OperationalError:

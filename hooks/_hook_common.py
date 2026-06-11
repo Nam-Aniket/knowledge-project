@@ -3,6 +3,7 @@
 Hooks must never break the user's session: every entry point swallows all
 exceptions and exits 0. Debug output goes to ~/.psyche/memzero_hook.log.
 """
+import hashlib
 import json
 import os
 import sys
@@ -71,6 +72,11 @@ def read_ledger(session_id: str) -> set:
             return set(json.load(f))
     except Exception:
         return set()
+
+
+def stable_block_hash(text: str) -> str:
+    """SHA-1 hex digest (12 chars) of the injection text — used as a cache-exposure key."""
+    return hashlib.sha1(text.encode()).hexdigest()[:12]
 
 
 def write_ledger(session_id: str, ids: set):
