@@ -18,6 +18,7 @@ def main():
 
 
 if __name__ == "__main__":
+    hc.recursion_guard()
     try:
         main()
     except Exception as e:

@@ -14,6 +14,13 @@ os.environ.setdefault("PSYCHE_NONINTERACTIVE", "1")
 LOG_PATH = os.path.expanduser("~/.psyche/memzero_hook.log")
 
 
+def recursion_guard():
+    """Exits immediately when running inside a headless claude spawned by a
+    hook (PSYCHE_MEM_HOOK=1), so extraction can't trigger hooks recursively."""
+    if os.environ.get("PSYCHE_MEM_HOOK") == "1":
+        sys.exit(0)
+
+
 def log(msg: str):
     try:
         with open(LOG_PATH, "a") as f:
