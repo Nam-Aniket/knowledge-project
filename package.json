@@ -52,6 +52,7 @@
     "bin/",
     "postinstall.js",
     "*.py",
+    "psyche/",
     "requirements.txt",
     "pyproject.toml",
     "README.md",

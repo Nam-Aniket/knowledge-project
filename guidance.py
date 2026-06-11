@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from db import (
-    get_connection, resolve_db_path, init_db,
+    get_connection, resolve_db_path, init_db, index_path_for,
     add_goal, get_goals, update_goal,
     add_experiment, get_experiments, update_experiment,
     add_metric_log, get_metric_logs,
@@ -177,34 +177,33 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
     finally:
         conn.close()
 
-    # Retrieve knowledge using existing hybrid search pipeline
+    # Retrieve knowledge using existing hybrid search pipeline.
+    # Try loading the usearch index FIRST; the full embeddings matrix is only a
+    # numpy fallback used when the index is absent.
     records = []
-    if llm.provider != "none":
-        conn = get_connection(db_path)
-        try:
-            records = get_all_embeddings_only(conn)
-        finally:
-            conn.close()
-
-    chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
-    valid_embeddings = [r["embedding"] for r in records if r["embedding"] is not None]
-    if valid_embeddings:
-        embeddings_matrix = np.vstack(valid_embeddings)
-    else:
-        embeddings_matrix = np.array([], dtype=np.float32)
-
-    # Load usearch index if available
+    chunk_ids = np.array([], dtype=np.int32)
+    embeddings_matrix = np.array([], dtype=np.float32)
     usearch_index = None
     if llm.provider != "none":
+        index_path = index_path_for(db_path)
         try:
             from usearch.index import Index
-            index_path = db_path.replace(".db", "") + ".usearch"
-            if os.path.exists(index_path) and embeddings_matrix.size > 0:
-                dim = embeddings_matrix.shape[1]
-                usearch_index = Index(ndim=dim, metric="cosine")
-                usearch_index.load(index_path)
+            if os.path.exists(index_path):
+                usearch_index = Index.restore(index_path)
         except Exception:
             usearch_index = None
+
+        if usearch_index is None:
+            # No index: fall back to loading all embeddings into a numpy matrix.
+            conn = get_connection(db_path)
+            try:
+                records = get_all_embeddings_only(conn)
+            finally:
+                conn.close()
+            chunk_ids = np.array([r["chunk_id"] for r in records if r["embedding"] is not None], dtype=np.int32)
+            valid_embeddings = [r["embedding"] for r in records if r["embedding"] is not None]
+            if valid_embeddings:
+                embeddings_matrix = np.vstack(valid_embeddings)
 
     # Build search query from goal + domain search terms
     search_query = goal_text

@@ -15,6 +15,10 @@ def resolve_db_path(db_path: str = None) -> str:
     home_dir = os.path.expanduser("~/.psyche")
     return os.path.join(home_dir, basename)
 
+def index_path_for(db_path):
+    """Derives the usearch index path for a database file."""
+    return os.path.splitext(db_path)[0] + ".usearch"
+
 def init_db(db_path: str):
     """Initializes the database schema if it doesn't already exist."""
     resolved_path = resolve_db_path(db_path)
@@ -227,7 +231,9 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
-    
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA synchronous = NORMAL")
+
     # Try to load sqlite-vec dynamically
     try:
         import sqlite_vec
@@ -439,16 +445,18 @@ def search_fts_ids(conn: sqlite3.Connection, query_text: str, limit: int = 20) -
     clean_query = query_text.replace("'", " ").replace('"', ' ').strip()
     if not clean_query:
         return []
+    # Force literal matching so FTS5 operators (AND/OR/NOT/*/:) are treated as plain tokens
+    fts_query = " ".join(f'"{tok}"' for tok in clean_query.split() if tok)
     try:
         cursor.execute("""
-            SELECT 
-                chunk_id, 
+            SELECT
+                chunk_id,
                 bm25(chunks_fts) AS score
             FROM chunks_fts
             WHERE chunks_fts MATCH ?
             ORDER BY score ASC
             LIMIT ?
-        """, (clean_query, limit))
+        """, (fts_query, limit))
         rows = cursor.fetchall()
         return [(int(row[0]), float(row[1])) for row in rows]
     except sqlite3.OperationalError:
@@ -467,13 +475,15 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
     clean_query = query_text.replace("'", " ").replace('"', ' ').strip()
     if not clean_query:
         return []
+    # Force literal matching so FTS5 operators (AND/OR/NOT/*/:) are treated as plain tokens
+    fts_query = " ".join(f'"{tok}"' for tok in clean_query.split() if tok)
     try:
         cursor.execute("""
-            SELECT 
-                c.id, 
-                c.text, 
+            SELECT
+                c.id,
+                c.text,
                 c.location,
-                s.title, 
+                s.title,
                 s.author,
                 e.embedding_blob
             FROM chunks_fts fts
@@ -483,7 +493,7 @@ def search_fts(conn: sqlite3.Connection, query_text: str, limit: int = 20) -> li
             WHERE chunks_fts MATCH ?
             ORDER BY bm25(chunks_fts) ASC
             LIMIT ?
-        """, (clean_query, limit))
+        """, (fts_query, limit))
         rows = cursor.fetchall()
     except sqlite3.OperationalError:
         cursor.execute("""
@@ -730,8 +740,8 @@ def build_or_update_usearch_index(db_path: str):
         return
         
     resolved_path = resolve_db_path(db_path)
-    index_path = resolved_path.replace(".db", "") + ".usearch"
-    
+    index_path = index_path_for(resolved_path)
+
     conn = get_connection(resolved_path)
     try:
         cursor = conn.cursor()
@@ -771,7 +781,7 @@ def update_usearch_index_incrementally(db_path: str, chunk_id: int, vector: list
         return
         
     resolved_path = resolve_db_path(db_path)
-    index_path = resolved_path.replace(".db", "") + ".usearch"
+    index_path = index_path_for(resolved_path)
     dim = len(vector)
     
     index = Index(ndim=dim, metric="cosine")
