@@ -210,5 +210,71 @@ class TestAtomicMemoryScoping(unittest.TestCase):
         self.assertIsNone(memzero.project_key_for(None))
 
 
+class TestSuperseding(unittest.TestCase):
+    OLD_FACT = "Node 20 is required for the deploy pipeline"
+    NEW_FACT = "Node 22 is required for the deploy pipeline"
+    DUP_FACT = "Node twenty is needed by the deploy pipeline"
+    QUERY = "which node version do deploys need"
+
+    def setUp(self):
+        self.db_path = "test_memory_supersede.db"
+        self.resolved_db_path = db.resolve_db_path(self.db_path)
+        self.mem_index_path = os.path.splitext(self.resolved_db_path)[0] + ".mem.usearch"
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+        db.init_db(self.db_path)
+        # cos(OLD, NEW) = 0.9 — inside the supersede band [0.80, 0.95).
+        # cos(OLD, DUP) = 0.96 — above DUP_SIMILARITY, treated as duplicate.
+        self.llm = FakeEmbedLLM({
+            self.OLD_FACT: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.NEW_FACT: [0.9, 0.43589, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.DUP_FACT: [0.96, 0.28, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.QUERY: [0.95, 0.31225, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        })
+
+    def tearDown(self):
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+    def test_supersede_marks_old_fact(self):
+        import memzero
+        old = memzero.add_memory(self.OLD_FACT, db_path=self.db_path, llm=self.llm)
+        new = memzero.add_memory(self.NEW_FACT, db_path=self.db_path, llm=self.llm)
+        self.assertEqual(new["superseded"], old["id"])
+
+        conn = db.get_connection(self.resolved_db_path)
+        try:
+            superseded_by = conn.execute(
+                "SELECT superseded_by FROM atomic_memories WHERE id = ?", (old["id"],)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(superseded_by, new["id"])
+
+        results = memzero.search_memories(self.QUERY, db_path=self.db_path, llm=self.llm)
+        facts = {r["fact"] for r in results}
+        self.assertIn(self.NEW_FACT, facts)
+        self.assertNotIn(self.OLD_FACT, facts)
+
+    def test_near_duplicate_above_095_is_skipped_not_superseded(self):
+        import memzero
+        old = memzero.add_memory(self.OLD_FACT, db_path=self.db_path, llm=self.llm)
+        dup = memzero.add_memory(self.DUP_FACT, db_path=self.db_path, llm=self.llm)
+        self.assertEqual(dup["duplicate_of"], old["id"])
+
+        conn = db.get_connection(self.resolved_db_path)
+        try:
+            total = conn.execute("SELECT COUNT(*) FROM atomic_memories").fetchone()[0]
+            superseded_by = conn.execute(
+                "SELECT superseded_by FROM atomic_memories WHERE id = ?", (old["id"],)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(total, 1)
+        self.assertIsNone(superseded_by)
+
+
 if __name__ == "__main__":
     unittest.main()

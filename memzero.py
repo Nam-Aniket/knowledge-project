@@ -20,6 +20,9 @@ from db import resolve_db_path, get_connection, init_db
 
 # Skip storing a fact whose cosine similarity to an existing live fact exceeds this.
 DUP_SIMILARITY = 0.95
+# A new fact in [SUPERSEDE_LOW, DUP_SIMILARITY) to an existing live fact marks
+# the old one superseded — write-time contradiction resolution, no LLM needed.
+SUPERSEDE_LOW = 0.80
 # Semantic matches below this similarity are discarded — weak matches waste
 # injected tokens. bge-small scores unrelated text ~0.4-0.5, related ~0.6+.
 DEFAULT_MIN_SCORE = float(os.getenv("PSYCHE_MEM_MIN_SCORE", "0.55"))
@@ -178,11 +181,41 @@ def _find_duplicate(db_path: str, vector) -> int | None:
         return None
 
 
+def _find_supersede_candidate(db_path: str, vector) -> tuple[int, float] | None:
+    """Returns (id, similarity) of the top live fact whose similarity to vector
+    is in [SUPERSEDE_LOW, DUP_SIMILARITY), else None."""
+    if vector is None:
+        return None
+    index = _load_mem_index(db_path)
+    if index is None or len(index) == 0:
+        return None
+    try:
+        matches = index.search(np.array(vector, dtype=np.float32), 1)
+        if len(matches) == 0:
+            return None
+        key = int(matches[0].key)
+        similarity = 1.0 - float(matches[0].distance)
+        if not (SUPERSEDE_LOW <= similarity < DUP_SIMILARITY):
+            return None
+        conn = get_connection(db_path)
+        try:
+            row = conn.execute(
+                "SELECT id FROM atomic_memories WHERE id = ? AND superseded_by IS NULL",
+                (key,),
+            ).fetchone()
+            return (row[0], similarity) if row else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
 def add_memory(fact: str, category: str = None, entities: list[str] = None,
                agent_id: str = None, run_id: str = None, project: str = None,
                db_path: str = None, llm=None) -> dict:
     """Stores a single atomic fact verbatim. project=None means a global fact.
-    Returns {id, fact, duplicate_of}."""
+    A near (not duplicate) match in [0.80, 0.95) marks the old fact superseded.
+    Returns {id, fact, duplicate_of, superseded}."""
     fact = (fact or "").strip()
     if not fact:
         raise ValueError("fact must be a non-empty string")
@@ -194,7 +227,9 @@ def add_memory(fact: str, category: str = None, entities: list[str] = None,
 
     dup_id = _find_duplicate(resolved, vector)
     if dup_id is not None:
-        return {"id": dup_id, "fact": fact, "duplicate_of": dup_id}
+        return {"id": dup_id, "fact": fact, "duplicate_of": dup_id, "superseded": None}
+
+    supersede = _find_supersede_candidate(resolved, vector)
 
     now = _now()
     blob = np.array(vector, dtype=np.float32).tobytes() if vector is not None else None
@@ -216,12 +251,21 @@ def add_memory(fact: str, category: str = None, entities: list[str] = None,
                 "INSERT OR IGNORE INTO memory_entities (memory_id, entity) VALUES (?, ?)",
                 (memory_id, entity),
             )
+        superseded_id = None
+        if supersede is not None:
+            cursor.execute(
+                "UPDATE atomic_memories SET superseded_by = ?, updated_at = ? "
+                "WHERE id = ? AND superseded_by IS NULL",
+                (memory_id, now, supersede[0]),
+            )
+            if cursor.rowcount:
+                superseded_id = supersede[0]
         conn.commit()
     finally:
         conn.close()
     if vector is not None:
         _add_to_mem_index(resolved, memory_id, vector)
-    return {"id": memory_id, "fact": fact, "duplicate_of": None}
+    return {"id": memory_id, "fact": fact, "duplicate_of": None, "superseded": superseded_id}
 
 
 def extract_and_store(transcript_text: str, agent_id: str = None, run_id: str = None,
@@ -374,7 +418,12 @@ def search_memories(query: str, agent_id: str = None, top: int = 8,
             for mid, row in rows.items():
                 if row[5] == project:
                     scores[mid] = scores.get(mid, 0.0) + 0.01
-        ranked_ids = [mid for mid, _ in sorted(scores.items(), key=lambda kv: -kv[1])]
+        # Tiebreaks: higher retrieval_count, then more recent updated_at.
+        by_recency = sorted(rows, key=lambda mid: rows[mid][4] or "", reverse=True)
+        ranked_ids = sorted(
+            by_recency,
+            key=lambda mid: (-scores.get(mid, 0.0), -(rows[mid][6] or 0)),
+        )
 
         sim_by_id = dict(semantic)
         results = []
