@@ -159,45 +159,38 @@ def detect_domain(query_text):
 
 # ─── Guidance Brief Generation ────────────────────────────────────────────────
 
-GUIDANCE_SYSTEM_INSTRUCTION = """\
-You are Psyche, a knowledge-grounded personal improvement advisor. Your role is to produce structured, actionable guidance briefs.
+from plan_schema import PLAN_SCHEMA_DESCRIPTION, parse_plan_response, coerce_plan, empty_plan
+
+GUIDANCE_SYSTEM_INSTRUCTION = f"""\
+You are Psyche, a knowledge-grounded planning engine. You turn a goal into an
+ACTIONABLE PLAN the user can execute this week — never vague advice.
 
 RULES:
-1. Ground every recommendation in the RETRIEVED KNOWLEDGE provided. Cite sources and locations.
-2. Never give vague motivational advice. Be specific and actionable.
-3. Every recommendation must connect to a measurable metric or observable feedback signal.
-4. If the retrieved knowledge is insufficient, say so explicitly in missing_information.
-5. If there is no strong retrieved principle found, explicitly state: "No strong retrieved principle found." Do not force a connection.
-6. Output valid JSON matching the schema exactly. No markdown wrapping, no extra text.
+1. Ground the diagnosis and principles in RETRIEVED KNOWLEDGE and KNOWN FACTS
+   provided below. Cite sources (Title, Location) for principles.
+2. Produce 2-5 concrete actions the USER performs themselves. Each action must be
+   small enough to finish within its time_estimate, have an observable
+   success_criterion, a horizon (today|this_week|this_month), and a
+   due_offset_days. Attach a metric when the action's progress is measurable.
+3. Pick first_action_index: the single smallest action to start with now.
+4. If retrieved knowledge is thin, still produce actions, but keep diagnosis honest.
+5. Output ONLY valid JSON matching the schema. No markdown, no commentary.
 
-OUTPUT SCHEMA:
-{
-  "domain": "<string>",
-  "stage": "<exploring|planning|executing|reviewing>",
-  "goal": "<one-line goal statement>",
-  "missing_information": ["<what you'd need to know to give better advice>"],
-  "relevant_principles": [
-    {"principle": "<key insight>", "source": "<Title, Location>"}
-  ],
-  "key_assumptions": ["<assumptions the recommendation depends on>"],
-  "risks_and_traps": ["<common mistakes or failure modes>"],
-  "suggested_metrics": [
-    {"name": "<metric_name>", "type": "<objective|subjective>", "unit": "<unit>"}
-  ],
-  "next_action": "<the single smallest next step>",
-  "success_condition": "<how to know it's working>",
-  "failure_condition": "<when to stop or change approach>",
-  "review_date": "<YYYY-MM-DD, typically 1-2 weeks out>",
-  "rule_suggestions": ["<personal rules to consider adopting>"]
-}
+SCHEMA:
+{PLAN_SCHEMA_DESCRIPTION}
 """
 
 
 def generate_guidance_brief(goal_text, domain, db_path, llm):
-    """Generates a structured guidance brief by retrieving knowledge and using LLM synthesis."""
+    """Generates a schema-validated ACTION PLAN by retrieving knowledge and
+    using LLM synthesis with retry-once strict parsing. Falls back to a
+    retrieval-only brief (actions: []) when no chat model is configured."""
     from query import perform_hybrid_search, format_context, retrieve_concept_context
     from db import get_all_embeddings_only, search_vector_vec
     import numpy as np
+
+    if getattr(llm, "chat_model", "none") == "none" or getattr(llm, "provider", "none") == "none":
+        return retrieval_only_brief(goal_text, domain, db_path, llm)
 
     pack = load_domain_pack(domain)
     conn = get_connection(db_path)
@@ -209,6 +202,11 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
         active_experiments = get_experiments(conn, status='active')
     finally:
         conn.close()
+
+    # Atomic-memory context: known durable facts about the user.
+    import memzero
+    facts = memzero.search_memories(goal_text, top=6, db_path=db_path, llm=llm)
+    facts_text = memzero.format_facts(facts, max_chars=1500) if facts else ""
 
     # Retrieve knowledge using existing hybrid search pipeline.
     # Try loading the usearch index FIRST; the full embeddings matrix is only a
@@ -300,6 +298,10 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
 
     review_date = (datetime.now(timezone.utc) + timedelta(days=14)).strftime("%Y-%m-%d")
 
+    facts_block = ""
+    if facts_text:
+        facts_block = f"\n### KNOWN FACTS ABOUT THE USER:\n{facts_text}\n"
+
     prompt = (
         f"Domain: {domain}\n"
         f"User's Goal/Problem: {goal_text}\n"
@@ -309,114 +311,136 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
         f"{rules_text}"
         f"{goals_text}"
         f"{experiments_text}"
+        f"{facts_block}"
         f"\n---\n\n"
         f"{full_context}\n\n"
-        f"Based on the above retrieved knowledge and context, generate a structured guidance brief as JSON."
+        f"Based on the above retrieved knowledge and context, generate an actionable plan as JSON."
     )
 
-    raw_response = llm.generate_completion(GUIDANCE_SYSTEM_INSTRUCTION, prompt)
+    raw = llm.generate_completion(GUIDANCE_SYSTEM_INSTRUCTION, prompt)
+    plan, reason = parse_plan_response(raw, goal_text, domain)
+    if plan is None or not plan.get("actions"):
+        retry_prompt = prompt + (
+            "\n\nYour previous reply was not valid or had no actions. "
+            "Reply again with ONLY the JSON object, 2-5 concrete actions, no prose."
+        )
+        raw = llm.generate_completion(GUIDANCE_SYSTEM_INSTRUCTION, retry_prompt)
+        plan, reason = parse_plan_response(raw, goal_text, domain)
+    if plan is None:
+        plan = empty_plan(goal_text, domain)
+        plan["diagnosis"] = "Could not generate a structured plan from the model."
+    else:
+        plan = coerce_plan(plan, goal_text, domain)
+    return plan
 
-    # Parse the JSON response
+
+def retrieval_only_brief(goal_text, domain, db_path, llm=None):
+    """Builds an action-less brief from local records when no chat model is
+    configured: top rules, matching open experiments, relevant atomic facts,
+    and top retrieved principles. Returns a plan dict (actions: []) plus
+    'open_experiments'/'facts' renderings. Never calls llm.generate_completion."""
+    from query import perform_hybrid_search, format_context
+    import numpy as np
+    import memzero
+
+    conn = get_connection(db_path)
     try:
-        cleaned = raw_response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            cleaned = "\n".join(lines).strip()
-        brief = json.loads(cleaned)
-    except (json.JSONDecodeError, ValueError):
-        import re
-        
-        # Regex-based fallback template parsing
-        def extract(pattern, text, default=""):
-            m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-            return m.group(1).strip() if m else default
-            
-        def extract_list(pattern, text):
-            block = extract(pattern, text)
-            if not block: return []
-            return [line.strip("- *").strip() for line in block.split("\n") if line.strip("- *")]
+        existing_rules = get_rules(conn, domain=domain)
+        active_experiments = get_experiments(conn, status='active')
+    finally:
+        conn.close()
 
-        # Attempt to salvage the most important parts into a brief structure
-        brief = {
-            "domain": domain,
-            "stage": "exploring",
-            "goal": goal_text,
-            "next_action": extract(r"(?:next\s*action|action|step)[^:]*:?\s*([^\n]+)", cleaned, "Review the raw response below."),
-            "success_condition": extract(r"success[^:]*:?\s*([^\n]+)", cleaned, ""),
-            "failure_condition": extract(r"failure[^:]*:?\s*([^\n]+)", cleaned, ""),
-            "review_date": extract(r"review[^:]*:?\s*([\d-]+)", cleaned, review_date),
-            "relevant_principles": [{"principle": p, "source": "Retrieved Context"} for p in extract_list(r"principles?[\s\"*]*:?[\s\[]*\n(.*?)(?:\"?\s*,|\n\n|\Z)", cleaned) if p],
-            "raw_response": raw_response,
-            "parse_error": "Could not strictly parse LLM response as JSON. Showing best-effort extraction. Raw response is available below."
-        }
+    plan = empty_plan(goal_text, domain)
+    plan["diagnosis"] = "Retrieval-only brief (no chat model configured)."
+    plan["rule_suggestions"] = [r["rule_text"] for r in existing_rules][:8]
+    plan["open_experiments"] = [
+        {"id": e["id"], "title": e["title"], "review_date": e.get("review_date")}
+        for e in active_experiments
+    ][:8]
 
-    return brief
+    if llm is not None and getattr(llm, "provider", "none") != "none":
+        usearch_index = None
+        try:
+            from usearch.index import Index
+            index_path = index_path_for(db_path)
+            if os.path.exists(index_path):
+                usearch_index = Index.restore(index_path)
+        except Exception:
+            usearch_index = None
+        try:
+            similarities = perform_hybrid_search(
+                db_path=db_path,
+                query_text=goal_text,
+                chunk_ids=np.array([], dtype=np.int32),
+                embeddings_matrix=np.array([], dtype=np.float32),
+                llm=llm,
+                usearch_index=usearch_index,
+                limit=5,
+            )
+            plan["relevant_principles"] = [
+                {"principle": (chunk.get("text") or "")[:200],
+                 "source": f"{chunk.get('source_title', 'Unknown')}, {chunk.get('location') or 'n/a'}"}
+                for chunk, _score in similarities[:5]
+            ]
+        except Exception:
+            pass
+        plan["facts"] = memzero.search_memories(goal_text, top=6, db_path=db_path, llm=llm)
+    else:
+        plan["facts"] = []
+
+    return plan
 
 
 def format_brief_for_display(brief):
-    """Renders a guidance brief as rich-formatted terminal output."""
+    """Renders an actionable plan as rich-formatted terminal output."""
     lines = []
     lines.append(f"[bold cyan]Domain:[/bold cyan] {brief.get('domain', 'unknown')}")
-    lines.append(f"[bold cyan]Stage:[/bold cyan] {brief.get('stage', 'unknown')}")
     lines.append(f"[bold cyan]Goal:[/bold cyan] {brief.get('goal', '')}")
 
-    if brief.get("parse_error"):
-        lines.append(f"\n[bold yellow]⚠ Parse Warning:[/bold yellow] {brief['parse_error']}")
-        if brief.get("raw_response"):
-            lines.append(f"\n[dim]{brief['raw_response']}[/dim]")
-        return "\n".join(lines)
+    if brief.get("diagnosis"):
+        lines.append(f"\n[bold blue]🩺 Diagnosis:[/bold blue] {brief['diagnosis']}")
 
-    missing = brief.get("missing_information", [])
-    if missing:
-        lines.append("\n[bold yellow]❓ Missing Information:[/bold yellow]")
-        for item in missing:
-            lines.append(f"  • {item}")
+    actions = brief.get("actions", [])
+    if actions:
+        lines.append("\n[bold green]✅ Actions:[/bold green]")
+        first = brief.get("first_action_index", 0)
+        for i, a in enumerate(actions):
+            marker = " [bold yellow]▶ START HERE[/bold yellow]" if i == first else ""
+            metric = a.get("metric") or {}
+            metric_str = f" · metric: {metric['name']} ({metric.get('unit','')})" if metric.get("name") else ""
+            lines.append(
+                f"  {i + 1}. {a.get('action', '')}{marker}\n"
+                f"     [dim]~{a.get('time_estimate_min', '?')}min · {a.get('horizon', '')} · "
+                f"due in {a.get('due_offset_days', '?')}d · success: {a.get('success_criterion', '')}{metric_str}[/dim]"
+            )
 
     principles = brief.get("relevant_principles", [])
     if principles:
-        lines.append("\n[bold green]📚 Relevant Principles:[/bold green]")
+        lines.append("\n[bold green]📚 Principles:[/bold green]")
         for p in principles:
             lines.append(f"  • {p.get('principle', '')} [dim]— {p.get('source', '')}[/dim]")
-
-    assumptions = brief.get("key_assumptions", [])
-    if assumptions:
-        lines.append("\n[bold blue]🔑 Key Assumptions:[/bold blue]")
-        for a in assumptions:
-            lines.append(f"  • {a}")
-
-    risks = brief.get("risks_and_traps", [])
-    if risks:
-        lines.append("\n[bold red]⚠ Risks & Traps:[/bold red]")
-        for r in risks:
-            lines.append(f"  • {r}")
-
-    metrics = brief.get("suggested_metrics", [])
-    if metrics:
-        lines.append("\n[bold magenta]📊 Suggested Metrics:[/bold magenta]")
-        for m in metrics:
-            lines.append(f"  • {m.get('name', '')} ({m.get('type', '')}, {m.get('unit', '')})")
-
-    if brief.get("next_action"):
-        lines.append(f"\n[bold green]▶ Next Action:[/bold green] {brief['next_action']}")
-
-    if brief.get("success_condition"):
-        lines.append(f"[bold green]✓ Success:[/bold green] {brief['success_condition']}")
-
-    if brief.get("failure_condition"):
-        lines.append(f"[bold red]✗ Failure/Kill:[/bold red] {brief['failure_condition']}")
-
-    if brief.get("review_date"):
-        lines.append(f"[bold cyan]📅 Review Date:[/bold cyan] {brief['review_date']}")
 
     rule_suggestions = brief.get("rule_suggestions", [])
     if rule_suggestions:
         lines.append("\n[bold yellow]📝 Suggested Rules:[/bold yellow]")
         for r in rule_suggestions:
             lines.append(f"  • {r}")
+
+    facts = brief.get("facts", [])
+    if facts:
+        lines.append("\n[bold magenta]🧠 Facts considered:[/bold magenta]")
+        for f in facts:
+            fact_text = f.get("fact", "") if isinstance(f, dict) else str(f)
+            lines.append(f"  • {fact_text}")
+
+    open_experiments = brief.get("open_experiments", [])
+    if open_experiments:
+        lines.append("\n[bold blue]🧪 Open Experiments:[/bold blue]")
+        for e in open_experiments:
+            lines.append(f"  • [#{e.get('id')}] {e.get('title', '')} [dim](review: {e.get('review_date') or 'unset'})[/dim]")
+
+    if brief.get("review_in_days"):
+        lines.append(f"\n[bold cyan]📅 Review in:[/bold cyan] {brief['review_in_days']} days")
 
     return "\n".join(lines)
 
@@ -462,16 +486,15 @@ def main():
         err_console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
         sys.exit(1)
 
-    if llm.chat_model == "none" or llm.provider == "none":
-        console.print("[bold yellow]⚠ Guidance brief generation requires an LLM (chat model).[/bold yellow]")
-        console.print("[dim]You can still use: psyche goal, psyche experiment, psyche log-metric, psyche review, psyche rules[/dim]")
-        sys.exit(1)
-
     console.print(f"\n[bold green]🧭 Generating Guidance Brief[/bold green]")
     console.print(f"[dim]Domain: {domain} | Goal: {args.goal}[/dim]\n")
 
     with console.status("[bold cyan]Retrieving knowledge and generating brief..."):
         brief = generate_guidance_brief(args.goal, domain, db_path, llm)
+
+    no_chat = llm.chat_model == "none" or llm.provider == "none"
+    if no_chat and brief.get("actions") == []:
+        console.print("[bold yellow]Retrieval-only brief (no chat model configured)[/bold yellow]")
 
     output = format_brief_for_display(brief)
     console.print(Panel(output, title="[bold]Guidance Brief[/bold]", border_style="cyan", padding=(1, 2)))
@@ -817,8 +840,6 @@ def generate_guidance_tool(goal_text, domain=None, topic=None):
 
     try:
         llm = LLMClient()
-        if llm.chat_model == "none" or llm.provider == "none":
-            return "Error: Guidance brief generation requires an LLM (chat model). Configure one with 'psyche setup'."
     except Exception as e:
         return f"Error initializing LLM client: {e}"
 
