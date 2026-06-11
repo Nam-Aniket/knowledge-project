@@ -40,6 +40,26 @@ def cwd_from_payload(payload) -> str | None:
     return payload.get("cwd") or payload.get("workspace") or None
 
 
+MEM_LEDGER_PATH = os.path.expanduser("~/.psyche/mem_ledger.jsonl")
+
+
+def append_ledger(event: str, session_id: str, count: int, chars: int, path: str = None):
+    """Appends one JSON line: {ts, event, session_id, count, chars}.
+    Swallows all errors (hooks must never break)."""
+    from datetime import datetime, timezone
+    try:
+        with open(path or MEM_LEDGER_PATH, "a") as f:
+            f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": event,
+                "session_id": session_id,
+                "count": count,
+                "chars": chars,
+            }) + "\n")
+    except Exception:
+        pass
+
+
 def ledger_path(session_id: str) -> str:
     safe = "".join(c for c in (session_id or "unknown") if c.isalnum() or c in "-_")
     return f"/tmp/psyche_mem_ledger_{safe}.json"

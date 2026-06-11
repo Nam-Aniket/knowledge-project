@@ -276,6 +276,31 @@ class TestMemCliHelpers(unittest.TestCase):
         self.assertEqual(s["total"], 1)
 
 
+class TestLedger(unittest.TestCase):
+    def test_ledger_append_and_summary(self):
+        import sys as _sys
+        import tempfile
+        import memzero
+        hooks_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks")
+        _sys.path.insert(0, hooks_dir)
+        try:
+            import _hook_common as hc
+        finally:
+            _sys.path.remove(hooks_dir)
+
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        try:
+            hc.append_ledger("session_start", "s1", 3, 400, path=path)
+            hc.append_ledger("prompt_submit", "s1", 2, 600, path=path)
+            summary = memzero.ledger_summary(path=path)
+            self.assertEqual(summary["total_injections"], 2)
+            self.assertEqual(summary["total_facts"], 5)
+            self.assertEqual(summary["tokens_injected"], (400 + 600) // 4)
+        finally:
+            os.unlink(path)
+
+
 class TestSuperseding(unittest.TestCase):
     OLD_FACT = "Node 20 is required for the deploy pipeline"
     NEW_FACT = "Node 22 is required for the deploy pipeline"

@@ -15,6 +15,7 @@ def main():
     print("Known durable facts about this user/project (Psyche memory):")
     print(text)
     hc.write_ledger(session_id, hc.read_ledger(session_id) | {r["id"] for r in rows})
+    hc.append_ledger("session_start", session_id, len(rows), len(text))
     hc.log(f"session_start {session_id}: injected {len(rows)} facts")
 
 

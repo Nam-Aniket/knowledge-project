@@ -26,6 +26,7 @@ def main():
             print(f"(Psyche memory: already stored as fact #{result['duplicate_of']}.)")
         else:
             print(f"(Psyche memory: stored fact #{result['id']} — \"{result['fact']}\". It will be recalled in future sessions across Claude Code, Codex, and Antigravity.)")
+            hc.append_ledger("remember_capture", session_id, 1, len(result["fact"]))
         hc.log(f"prompt_submit {session_id}: remember-capture #{result['id']}")
         return
 
@@ -38,9 +39,11 @@ def main():
     fresh = [r for r in results if r["id"] not in seen]
     if not fresh:
         return
+    formatted = memzero.format_facts(fresh, max_chars=2500)
     print("Relevant facts from Psyche memory:")
-    print(memzero.format_facts(fresh, max_chars=2500))
+    print(formatted)
     hc.write_ledger(session_id, seen | {r["id"] for r in fresh})
+    hc.append_ledger("prompt_submit", session_id, len(fresh), len(formatted))
     hc.log(f"prompt_submit {session_id}: injected {len(fresh)} facts")
 
 

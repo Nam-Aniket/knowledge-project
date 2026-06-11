@@ -642,6 +642,35 @@ def stats(db_path: str = None) -> dict:
             "total_retrievals": total_retrievals, "never_retrieved": never_retrieved}
 
 
+MEM_LEDGER_PATH = os.path.expanduser("~/.psyche/mem_ledger.jsonl")
+
+
+def ledger_summary(path: str = None) -> dict:
+    """Summarizes the hook injection ledger: total injections, facts and chars
+    injected, and tokens injected estimated as chars/4 — which equals the
+    re-derivation avoided (an injected fact is one the agent didn't re-derive)."""
+    path = path or MEM_LEDGER_PATH
+    total_injections = total_facts = total_chars = 0
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                total_injections += 1
+                total_facts += int(entry.get("count", 0))
+                total_chars += int(entry.get("chars", 0))
+    except OSError:
+        pass
+    return {
+        "total_injections": total_injections,
+        "total_facts": total_facts,
+        "total_chars": total_chars,
+        "tokens_injected": total_chars // 4,
+    }
+
+
 def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None) -> list[dict]:
     """Recent durable preference/decision/lesson facts for session-start
     injection. With a project, returns that project's facts plus globals,
