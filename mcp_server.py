@@ -274,7 +274,7 @@ def main():
                     },
                     "serverInfo": {
                         "name": "psyche-mcp",
-                        "version": "0.2.0"
+                        "version": "0.6.0"
                     }
                 }
             elif method == "notifications/initialized":

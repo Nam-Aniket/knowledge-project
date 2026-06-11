@@ -12,6 +12,17 @@
 
 ---
 
+## 🆕 What's New in 0.6
+
+- **Actionable Guidance Plans**: Turn goals into concrete tasks using `psyche guide "<goal>" --apply`.
+- **Check-in Loop**: Follow through on your plans and log reviews using `psyche checkin <goal_id> -u "<update text>"`.
+- **One-Command Onboarding**: Wire Psyche into your coding agents instantly with `psyche connect <client>`.
+- **Memory CLI**: Manage your atomic facts from the terminal with the `psyche mem` subcommands (`list`, `search`, `add`, `prune`, `stats`).
+- **Project-Scoped Memory**: Facts are now scoped to your project directories for higher relevance.
+- **Token Ledger**: Track tokens saved from automatic memory injection in `psyche mem stats`.
+
+---
+
 ## 🎯 Why This Matters
 
 > **Turn your Obsidian vaults, books, and documents into a private, local-first knowledge-guided decision and experiment tracking system for AI assistants.**
