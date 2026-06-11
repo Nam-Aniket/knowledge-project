@@ -181,22 +181,21 @@ SCHEMA:
 """
 
 
-def generate_guidance_brief(goal_text, domain, db_path, llm):
-    """Generates a schema-validated ACTION PLAN by retrieving knowledge and
-    using LLM synthesis with retry-once strict parsing. Falls back to a
-    retrieval-only brief (actions: []) when no chat model is configured."""
-    from query import perform_hybrid_search, format_context, retrieve_concept_context
-    from db import get_all_embeddings_only, search_vector_vec
-    import numpy as np
+def _gather_guidance_context(goal_text, domain, db_path, llm) -> dict:
+    """Gathers all retrieval/context needed for guidance generation.
 
-    if getattr(llm, "chat_model", "none") == "none" or getattr(llm, "provider", "none") == "none":
-        return retrieval_only_brief(goal_text, domain, db_path, llm)
+    Returns a dict with keys:
+      retrieved_knowledge, graph_context, known_facts, active_goals,
+      active_experiments, personal_rules, diagnostic_questions, available_metrics
+    """
+    from query import perform_hybrid_search, format_context, retrieve_concept_context
+    from db import get_all_embeddings_only
+    import numpy as np
+    import memzero
 
     pack = load_domain_pack(domain)
     conn = get_connection(db_path)
-
     try:
-        # Gather context: existing rules, goals, experiments
         existing_rules = get_rules(conn, domain=domain)
         active_goals = get_goals(conn, domain=domain, status='active')
         active_experiments = get_experiments(conn, status='active')
@@ -204,18 +203,15 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
         conn.close()
 
     # Atomic-memory context: known durable facts about the user.
-    import memzero
     facts = memzero.search_memories(goal_text, top=6, db_path=db_path, llm=llm)
     facts_text = memzero.format_facts(facts, max_chars=1500) if facts else ""
 
     # Retrieve knowledge using existing hybrid search pipeline.
-    # Try loading the usearch index FIRST; the full embeddings matrix is only a
-    # numpy fallback used when the index is absent.
     records = []
     chunk_ids = np.array([], dtype=np.int32)
     embeddings_matrix = np.array([], dtype=np.float32)
     usearch_index = None
-    if llm.provider != "none":
+    if getattr(llm, "provider", "none") != "none":
         index_path = index_path_for(db_path)
         try:
             from usearch.index import Index
@@ -225,7 +221,6 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
             usearch_index = None
 
         if usearch_index is None:
-            # No index: fall back to loading all embeddings into a numpy matrix.
             conn = get_connection(db_path)
             try:
                 records = get_all_embeddings_only(conn)
@@ -236,11 +231,9 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
             if valid_embeddings:
                 embeddings_matrix = np.vstack(valid_embeddings)
 
-    # Build search query from goal + domain search terms
     search_query = goal_text
     search_terms = pack.get("search_terms", [])
     if search_terms:
-        # Add a few relevant domain terms to enrich the query
         search_query += " " + " ".join(search_terms[:3])
 
     similarities = perform_hybrid_search(
@@ -254,53 +247,82 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
     )
     context_str = format_context(similarities, top_n=8)
 
-    # Retrieve concept graph context
     conn = get_connection(db_path)
     try:
         graph_context = retrieve_concept_context(conn, goal_text)
     finally:
         conn.close()
 
-    # Build the prompt
-    rules_text = ""
-    if existing_rules:
-        rules_text = "\n### PERSONAL RULES (learned from past experience):\n"
-        for r in existing_rules:
-            rules_text += f"- [{r['confidence']}] {r['rule_text']} (source: {r['source'] or 'manual'})\n"
-
-    goals_text = ""
-    if active_goals:
-        goals_text = "\n### ACTIVE GOALS:\n"
-        for g in active_goals:
-            goals_text += f"- [{g['domain']}] {g['title']} (stage: {g['stage']})\n"
-
-    experiments_text = ""
-    if active_experiments:
-        experiments_text = "\n### ACTIVE EXPERIMENTS:\n"
-        for e in active_experiments:
-            experiments_text += f"- {e['title']} (metric: {e['metric_name'] or 'none'}, review: {e['review_date'] or 'unset'})\n"
-
-    questions_text = "\n### DIAGNOSTIC QUESTIONS TO CONSIDER:\n"
-    for q in pack.get("diagnostic_questions", []):
-        questions_text += f"- {q}\n"
-
-    metrics_text = ""
-    domain_metrics = pack.get("metrics", [])
-    if domain_metrics:
-        metrics_text = "\n### AVAILABLE METRICS FOR THIS DOMAIN:\n"
-        for m in domain_metrics:
-            metrics_text += f"- {m['name']} ({m['type']}, {m['unit']})\n"
-
     full_context = ""
     if graph_context:
         full_context += f"{graph_context}\n\n---\n\n"
     full_context += f"### RETRIEVED KNOWLEDGE:\n{context_str}"
 
+    return {
+        "retrieved_knowledge": full_context,
+        "graph_context": graph_context,
+        "known_facts": facts_text,
+        "active_goals": [
+            {"domain": g["domain"], "title": g["title"], "stage": g["stage"]}
+            for g in active_goals
+        ],
+        "active_experiments": [
+            {"title": e["title"], "metric_name": e.get("metric_name"), "review_date": e.get("review_date")}
+            for e in active_experiments
+        ],
+        "personal_rules": [
+            {"confidence": r["confidence"], "rule_text": r["rule_text"], "source": r["source"] or "manual"}
+            for r in existing_rules
+        ],
+        "diagnostic_questions": pack.get("diagnostic_questions", []),
+        "available_metrics": pack.get("metrics", []),
+    }
+
+
+def generate_guidance_brief(goal_text, domain, db_path, llm):
+    """Generates a schema-validated ACTION PLAN by retrieving knowledge and
+    using LLM synthesis with retry-once strict parsing. Falls back to a
+    retrieval-only brief (actions: []) when no chat model is configured."""
+
+    if getattr(llm, "chat_model", "none") == "none" or getattr(llm, "provider", "none") == "none":
+        return retrieval_only_brief(goal_text, domain, db_path, llm)
+
+    ctx = _gather_guidance_context(goal_text, domain, db_path, llm)
+
+    # Build the prompt using gathered context
+    rules_text = ""
+    if ctx["personal_rules"]:
+        rules_text = "\n### PERSONAL RULES (learned from past experience):\n"
+        for r in ctx["personal_rules"]:
+            rules_text += f"- [{r['confidence']}] {r['rule_text']} (source: {r['source']})\n"
+
+    goals_text = ""
+    if ctx["active_goals"]:
+        goals_text = "\n### ACTIVE GOALS:\n"
+        for g in ctx["active_goals"]:
+            goals_text += f"- [{g['domain']}] {g['title']} (stage: {g['stage']})\n"
+
+    experiments_text = ""
+    if ctx["active_experiments"]:
+        experiments_text = "\n### ACTIVE EXPERIMENTS:\n"
+        for e in ctx["active_experiments"]:
+            experiments_text += f"- {e['title']} (metric: {e['metric_name'] or 'none'}, review: {e['review_date'] or 'unset'})\n"
+
+    questions_text = "\n### DIAGNOSTIC QUESTIONS TO CONSIDER:\n"
+    for q in ctx["diagnostic_questions"]:
+        questions_text += f"- {q}\n"
+
+    metrics_text = ""
+    if ctx["available_metrics"]:
+        metrics_text = "\n### AVAILABLE METRICS FOR THIS DOMAIN:\n"
+        for m in ctx["available_metrics"]:
+            metrics_text += f"- {m['name']} ({m['type']}, {m['unit']})\n"
+
     review_date = (datetime.now(timezone.utc) + timedelta(days=14)).strftime("%Y-%m-%d")
 
     facts_block = ""
-    if facts_text:
-        facts_block = f"\n### KNOWN FACTS ABOUT THE USER:\n{facts_text}\n"
+    if ctx["known_facts"]:
+        facts_block = f"\n### KNOWN FACTS ABOUT THE USER:\n{ctx['known_facts']}\n"
 
     prompt = (
         f"Domain: {domain}\n"
@@ -313,7 +335,7 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
         f"{experiments_text}"
         f"{facts_block}"
         f"\n---\n\n"
-        f"{full_context}\n\n"
+        f"{ctx['retrieved_knowledge']}\n\n"
         f"Based on the above retrieved knowledge and context, generate an actionable plan as JSON."
     )
 
@@ -331,7 +353,27 @@ def generate_guidance_brief(goal_text, domain, db_path, llm):
         plan["diagnosis"] = "Could not generate a structured plan from the model."
     else:
         plan = coerce_plan(plan, goal_text, domain)
+    plan["synthesized_by"] = "psyche-llm"
     return plan
+
+
+def build_synthesis_pack(goal_text, domain, db_path, llm) -> dict:
+    """Returns a synthesis pack dict telling the host agent to synthesize and
+    submit a plan JSON via submit_guidance_plan. No LLM call is made."""
+    from plan_schema import PLAN_SCHEMA_DESCRIPTION
+    ctx = _gather_guidance_context(goal_text, domain, db_path, llm)
+    return {
+        "mode": "synthesis_pack",
+        "domain": domain,
+        "goal": goal_text,
+        "instruction": (
+            "You are the synthesizer. Using ONLY the context below, produce a plan as JSON "
+            "matching `schema`, then call the submit_guidance_plan tool with it as plan_json. "
+            "Do not improvise a plan outside Psyche — submitting it is what makes it tracked."
+        ),
+        "schema": PLAN_SCHEMA_DESCRIPTION,
+        "context": ctx,
+    }
 
 
 def retrieval_only_brief(goal_text, domain, db_path, llm=None):
@@ -1071,12 +1113,94 @@ def generate_guidance_tool(goal_text, domain=None, topic=None, apply=False):
         return f"Error initializing LLM client: {e}"
 
     try:
+        if getattr(llm, "chat_model", "none") == "none" or getattr(llm, "provider", "none") == "none":
+            return json.dumps(build_synthesis_pack(goal_text, domain, db_path, llm), indent=2)
         brief = generate_guidance_brief(goal_text, domain, db_path, llm)
         if apply and brief.get("actions"):
             brief["_materialized"] = materialize_plan(brief, db_path)
         return json.dumps(brief, indent=2)
     except Exception as e:
         return f"Error generating guidance brief: {e}"
+
+
+def submit_guidance_plan_tool(plan_json, topic=None, apply=True) -> str:
+    """MCP tool handler: validates and materializes a host-agent-synthesized plan.
+
+    plan_json: str (JSON) or dict. Must conform to PLAN_SCHEMA_DESCRIPTION.
+    topic: optional topic-scoped database name.
+    apply: if True, materialize; if False, return validated plan JSON (preview).
+    """
+    from plan_schema import parse_plan_response, coerce_plan, PLAN_SCHEMA_DESCRIPTION
+
+    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
+    if topic:
+        db_path = resolve_db_path(f"topic_{topic}.db")
+    init_db(db_path)
+
+    # Defensively read goal/domain from submitted object.
+    if isinstance(plan_json, str):
+        try:
+            _obj = json.loads(plan_json)
+        except (json.JSONDecodeError, TypeError):
+            _obj = {}
+    elif isinstance(plan_json, dict):
+        _obj = plan_json
+    else:
+        _obj = {}
+
+    goal_text = _obj.get("goal") or ""
+    domain = _obj.get("domain") or "general"
+
+    # Parse/coerce into a validated plan.
+    if isinstance(plan_json, str):
+        plan, reason = parse_plan_response(plan_json, goal_text, domain)
+    else:
+        try:
+            plan = coerce_plan(plan_json, goal_text, domain)
+        except (ValueError, TypeError) as e:
+            plan, reason = None, str(e)
+        else:
+            from plan_schema import validate_plan
+            ok, reason = validate_plan(plan)
+            if not ok:
+                plan = None
+
+    if plan is None:
+        return json.dumps({"error": reason, "schema": PLAN_SCHEMA_DESCRIPTION})
+
+    plan["synthesized_by"] = "host-agent"
+
+    # Dedup: active goal with same title created within the last 10 minutes.
+    conn = get_connection(db_path)
+    try:
+        active_goals = get_goals(conn, domain=domain, status='active')
+    finally:
+        conn.close()
+
+    from datetime import timezone as _tz
+    now = datetime.now(timezone.utc)
+    for g in active_goals:
+        if g["title"] == plan["goal"]:
+            created_at_str = g.get("created_at") or ""
+            try:
+                # Handle both "2026-01-01T00:00:00" and "2026-01-01 00:00:00" formats.
+                created_at_str_clean = created_at_str.replace(" ", "T")
+                if not created_at_str_clean.endswith("Z") and "+" not in created_at_str_clean:
+                    created_at_str_clean += "+00:00"
+                created_at = datetime.fromisoformat(created_at_str_clean)
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                age_seconds = (now - created_at).total_seconds()
+                if age_seconds < 600:
+                    return json.dumps({"status": "duplicate", "goal_id": g["id"]})
+            except (ValueError, TypeError):
+                pass
+
+    if not apply:
+        return json.dumps(plan, indent=2)
+
+    result = materialize_plan(plan, db_path)
+    return json.dumps({"status": "materialized", **result, "synthesized_by": "host-agent"})
 
 
 def checkin_tool(goal_id, update, topic=None):
