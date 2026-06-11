@@ -294,6 +294,55 @@ class TestGuidanceLayer(unittest.TestCase):
         for e in experiments:
             datetime.strptime(e[3], "%Y-%m-%d")
 
+    def test_checkin_no_chat_logs_review(self):
+        """No chat model: the update is logged as one review, no LLM call."""
+        goal_id = db.add_goal(self.conn, domain="wealth", title="Save $2k")
+        db.add_experiment(self.conn, goal_id=goal_id, title="Cancel 2 subscriptions",
+                          success_condition="2 cancelled")
+
+        mock_llm = mock.Mock()
+        mock_llm.provider = "none"
+        mock_llm.chat_model = "none"
+        mock_llm.generate_completion.side_effect = AssertionError("must not be called")
+
+        result = guidance.checkin_plan(goal_id, "I cancelled one sub", self.db_path, mock_llm)
+        mock_llm.generate_completion.assert_not_called()
+        self.assertEqual(len(result["reviews"]), 1)
+        reviews = db.get_reviews(self.conn, goal_id=goal_id)
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0]["what_happened"], "I cancelled one sub")
+
+    def test_checkin_chat_completes_and_stores_decision(self):
+        """Chat path: experiment completed, review written, decision stored as atomic fact."""
+        goal_id = db.add_goal(self.conn, domain="wealth", title="Save $2k")
+        exp_id = db.add_experiment(self.conn, goal_id=goal_id, title="Cancel 2 subscriptions",
+                                   success_condition="2 cancelled")
+
+        mock_llm = mock.Mock()
+        mock_llm.provider = "mock"
+        mock_llm.chat_model = "mock-model"
+        mock_llm.get_embedding.return_value = [0.1] * 8
+        mock_llm.generate_completion.return_value = json.dumps({
+            "summary": "Both subscriptions cancelled. Goal on track.",
+            "experiment_updates": [
+                {"experiment_id": exp_id, "decision": "complete", "reason": "Both subs cancelled"}
+            ],
+            "key_decisions": ["User cancels unused subscriptions quarterly to control spending"],
+        })
+
+        result = guidance.checkin_plan(goal_id, "Cancelled both subscriptions today", self.db_path, mock_llm)
+        self.assertIn(exp_id, result["completed"])
+        self.assertEqual(len(result["reviews"]), 1)
+        self.assertEqual(len(result["facts_stored"]), 1)
+
+        exp = db.get_experiments(self.conn, goal_id=goal_id, status="completed")
+        self.assertEqual(len(exp), 1)
+        fact_row = self.conn.execute(
+            "SELECT category, fact FROM atomic_memories WHERE id = ?", (result["facts_stored"][0],)
+        ).fetchone()
+        self.assertEqual(fact_row[0], "decision")
+        self.assertIn("subscriptions", fact_row[1])
+
     def test_retrieval_only_when_no_chat(self):
         """No chat model: retrieval-only brief, generate_completion never called."""
         mock_llm = mock.Mock()

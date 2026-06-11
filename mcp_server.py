@@ -517,6 +517,28 @@ def main():
                             }
                         },
                         {
+                            "name": "checkin_plan",
+                            "description": "Follow through on an active plan: assess progress on a goal's open experiments from the user's update, log reviews, complete experiments, and remember key decisions.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "goal_id": {
+                                        "type": "integer",
+                                        "description": "The goal id to check in on"
+                                    },
+                                    "update": {
+                                        "type": "string",
+                                        "description": "What happened since last time"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["goal_id", "update"]
+                            }
+                        },
+                        {
                             "name": "add_memory",
                             "description": "Store a durable atomic fact (user preference, decision, lesson, or stable project fact) in cross-agent memory. Near-duplicates are skipped automatically.",
                             "inputSchema": {
@@ -743,6 +765,12 @@ def main():
                                 }
                             ]
                         }
+                    elif tool_name == "checkin_plan":
+                        from guidance import checkin_tool
+                        text_result = checkin_tool(
+                            arguments.get("goal_id"), arguments.get("update"), arguments.get("topic")
+                        )
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
                     elif tool_name == "add_memory":
                         import memzero
                         db_path = resolve_topic_db_path(arguments.get("topic"))

@@ -29,7 +29,7 @@ def main():
         os.environ["DATABASE_PATH"] = resolve_db_path(f"topic_{topic_name}.db")
 
     if len(sys.argv) < 2:
-        print("Usage: psyche [setup | ingest | query | chat | build-graph | guide | goal | experiment | log-metric | review | rules | compact-memory | start-mcp] [options]")
+        print("Usage: psyche [setup | ingest | query | chat | build-graph | guide | checkin | goal | experiment | log-metric | review | rules | compact-memory | start-mcp] [options]")
         sys.exit(1)
         
     subcommand = sys.argv[1].lower()
@@ -61,6 +61,9 @@ def main():
     elif subcommand == "guide":
         import guidance
         guidance.main()
+    elif subcommand == "checkin":
+        import guidance
+        guidance.checkin_main()
     elif subcommand == "goal":
         import guidance
         guidance.goal_main()
@@ -85,7 +88,7 @@ def main():
             sys.exit(1)
     else:
         print(f"Unknown command: {subcommand}")
-        print("Available commands: setup, ingest, query, chat, build-graph, guide, goal, experiment, log-metric, review, rules, compact-memory, start-mcp")
+        print("Available commands: setup, ingest, query, chat, build-graph, guide, checkin, goal, experiment, log-metric, review, rules, compact-memory, start-mcp")
         sys.exit(1)
 
 if __name__ == "__main__":

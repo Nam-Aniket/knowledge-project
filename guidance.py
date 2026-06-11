@@ -427,6 +427,143 @@ def materialize_plan(plan: dict, db_path: str) -> dict:
     return {"plan_id": plan_id, "goal_id": goal_id, "experiment_ids": experiment_ids}
 
 
+CHECKIN_SYSTEM_INSTRUCTION = """\
+You are Psyche's follow-through coach. Given a goal, its open experiments,
+recent metrics, prior reviews, and the user's update on what happened, assess
+progress and decide next steps.
+
+Output ONLY valid JSON matching exactly:
+{"summary":"<2 sentences>",
+ "experiment_updates":[{"experiment_id":<int>,"decision":"keep|complete|adjust","reason":"<one line>","next_action":"<optional>","new_review_in_days":<optional int>}],
+ "key_decisions":["<durable decision worth remembering>"]}
+
+Rules: only reference experiment_ids that were listed; mark 'complete' only when
+the success condition is met per the user's update; 1-3 key_decisions maximum,
+each a self-contained sentence worth remembering long-term. No markdown."""
+
+
+def _parse_checkin_response(raw):
+    """Fence-strips and parses the check-in JSON; returns dict or None."""
+    import re as _re
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    cleaned = _re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
+    try:
+        obj = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict) or not isinstance(obj.get("experiment_updates"), list):
+        return None
+    return obj
+
+
+def checkin_plan(goal_id: int, update_text: str, db_path: str, llm) -> dict:
+    """Follow-through on an active plan: assess progress per experiment, log
+    reviews, complete/adjust experiments, and store key decisions as atomic
+    facts. Without a chat model, records the update as a single review.
+    Returns {'reviews', 'completed', 'facts_stored', 'summary'}."""
+    from db import add_review, update_experiment
+    import memzero
+
+    conn = get_connection(db_path)
+    try:
+        goals = [g for g in get_goals(conn, status=None) if g["id"] == goal_id]
+        if not goals:
+            raise ValueError(f"Goal #{goal_id} not found.")
+        goal = goals[0]
+        experiments = get_experiments(conn, goal_id=goal_id, status='active')
+        metric_logs = get_metric_logs(conn, goal_id=goal_id, limit=20)
+        reviews = get_reviews(conn, goal_id=goal_id, limit=5)
+    finally:
+        conn.close()
+
+    result = {"reviews": [], "completed": [], "facts_stored": [], "summary": ""}
+    no_chat = getattr(llm, "chat_model", "none") == "none" or getattr(llm, "provider", "none") == "none"
+
+    parsed = None
+    if not no_chat:
+        exp_lines = "\n".join(
+            f"- [#{e['id']}] {e['title']} (success: {e['success_condition'] or 'unset'}, "
+            f"metric: {e['metric_name'] or 'none'}, review: {e['review_date'] or 'unset'})"
+            for e in experiments
+        ) or "- (none)"
+        metric_lines = "\n".join(
+            f"- {m['metric_name']}: {m['value']} {m['unit'] or ''} ({m['logged_at'][:10]})"
+            for m in metric_logs
+        ) or "- (none)"
+        review_lines = "\n".join(
+            f"- {r['created_at'][:10]}: {r['what_happened'] or ''}" for r in reviews
+        ) or "- (none)"
+        prompt = (
+            f"Goal #{goal['id']} [{goal['domain']}]: {goal['title']}\n\n"
+            f"OPEN EXPERIMENTS:\n{exp_lines}\n\n"
+            f"RECENT METRICS:\n{metric_lines}\n\n"
+            f"PRIOR REVIEWS:\n{review_lines}\n\n"
+            f"USER UPDATE (what happened since last time):\n{update_text}\n\n"
+            f"Assess and reply with the JSON object only."
+        )
+        raw = llm.generate_completion(CHECKIN_SYSTEM_INSTRUCTION, prompt)
+        parsed = _parse_checkin_response(raw)
+        if parsed is None:
+            raw = llm.generate_completion(
+                CHECKIN_SYSTEM_INSTRUCTION,
+                prompt + "\n\nYour previous reply was not valid JSON. Reply with ONLY the JSON object.",
+            )
+            parsed = _parse_checkin_response(raw)
+
+    if parsed is None:
+        # No chat model (or parse failure): record the raw update as one review.
+        conn = get_connection(db_path)
+        try:
+            review_id = add_review(conn, what_happened=update_text, goal_id=goal_id)
+            conn.commit()
+        finally:
+            conn.close()
+        result["reviews"].append(review_id)
+        result["summary"] = "Update recorded as a review (no model assessment)."
+        return result
+
+    conn = get_connection(db_path)
+    try:
+        exp_by_id = {e["id"]: e for e in experiments}
+        matched = False
+        for update in parsed.get("experiment_updates", []):
+            exp_id = update.get("experiment_id")
+            if exp_id not in exp_by_id:
+                continue
+            matched = True
+            review_id = add_review(
+                conn, what_happened=update_text, lesson=update.get("reason"),
+                next_action=update.get("next_action"), experiment_id=exp_id, goal_id=goal_id,
+            )
+            result["reviews"].append(review_id)
+            decision = update.get("decision")
+            if decision == "complete":
+                update_experiment(conn, exp_id, status='completed', outcome=update.get("reason"))
+                result["completed"].append(exp_id)
+            elif decision == "adjust" and update.get("new_review_in_days"):
+                new_date = (datetime.now(timezone.utc) + timedelta(days=int(update["new_review_in_days"]))).strftime("%Y-%m-%d")
+                update_experiment(conn, exp_id, review_date=new_date)
+        if not matched:
+            review_id = add_review(conn, what_happened=update_text, goal_id=goal_id)
+            result["reviews"].append(review_id)
+        conn.commit()
+    finally:
+        conn.close()
+
+    result["summary"] = parsed.get("summary", "")
+    for decision_text in (parsed.get("key_decisions") or [])[:3]:
+        if not isinstance(decision_text, str) or not decision_text.strip():
+            continue
+        stored = memzero.add_memory(
+            decision_text, category='decision', agent_id='psyche-checkin',
+            db_path=db_path, llm=llm,
+        )
+        if stored["duplicate_of"] is None:
+            result["facts_stored"].append(stored["id"])
+    return result
+
+
 def format_brief_for_display(brief):
     """Renders an actionable plan as rich-formatted terminal output."""
     lines = []
@@ -544,6 +681,51 @@ def main():
         )
         console.print(f"[dim]Check in later with: psyche checkin {result['goal_id']}[/dim]")
     console.print("")
+
+
+def checkin_main():
+    """CLI handler for 'psyche checkin' — follow through on an active plan."""
+    parser = argparse.ArgumentParser(prog="psyche checkin", description="Check in on an active plan/goal.")
+    parser.add_argument("goal_id", type=int, help="The goal id to check in on (see 'psyche goal list').")
+    parser.add_argument("--update", "-u", help="What happened since last time.")
+    parser.add_argument("--db-path", help="Database file path override.")
+    args = parser.parse_args()
+
+    db_path = resolve_db_path(args.db_path or os.getenv("DATABASE_PATH", "knowledge.db"))
+    init_db(db_path)
+
+    update_text = args.update
+    if not update_text:
+        if sys.stdin.isatty():
+            update_text = console.input("[bold cyan]What happened since last time?[/bold cyan] ")
+        else:
+            update_text = sys.stdin.read().strip()
+    if not update_text:
+        console.print("[bold red]Error:[/bold red] an update is required.")
+        sys.exit(1)
+
+    try:
+        llm = LLMClient()
+    except Exception as e:
+        err_console.print(f"[bold red]Error initializing LLM client:[/bold red] {e}")
+        sys.exit(1)
+
+    try:
+        with console.status("[bold cyan]Checking in..."):
+            result = checkin_plan(args.goal_id, update_text, db_path, llm)
+    except ValueError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+
+    lines = []
+    if result["summary"]:
+        lines.append(f"[bold blue]Summary:[/bold blue] {result['summary']}")
+    lines.append(f"[bold green]Reviews logged:[/bold green] {len(result['reviews'])}")
+    if result["completed"]:
+        lines.append(f"[bold green]✔ Completed experiments:[/bold green] {result['completed']}")
+    if result["facts_stored"]:
+        lines.append(f"[bold magenta]🧠 Decisions remembered:[/bold magenta] {len(result['facts_stored'])}")
+    console.print(Panel("\n".join(lines), title="[bold]Check-in[/bold]", border_style="green", padding=(1, 2)))
 
 
 def goal_main():
@@ -895,6 +1077,25 @@ def generate_guidance_tool(goal_text, domain=None, topic=None, apply=False):
         return json.dumps(brief, indent=2)
     except Exception as e:
         return f"Error generating guidance brief: {e}"
+
+
+def checkin_tool(goal_id, update, topic=None):
+    """MCP tool handler for checking in on an active plan."""
+    db_path = resolve_db_path(os.getenv("DATABASE_PATH", "knowledge.db"))
+    if topic:
+        db_path = resolve_db_path(f"topic_{topic}.db")
+    init_db(db_path)
+
+    try:
+        llm = LLMClient()
+    except Exception as e:
+        return f"Error initializing LLM client: {e}"
+
+    try:
+        result = checkin_plan(int(goal_id), update, db_path, llm)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error during check-in: {e}"
 
 
 def list_goals_experiments_tool(domain=None, topic=None):
