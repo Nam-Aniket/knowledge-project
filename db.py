@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 # Current schema version. Bump this whenever the schema changes and append a
 # matching (version, callable) pair to MIGRATIONS below.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _create_atomic_memory_tables(conn: sqlite3.Connection):
@@ -45,10 +45,30 @@ def _migrate_v2_atomic_memories(conn: sqlite3.Connection):
     _create_atomic_memory_tables(conn)
 
 
+def _migrate_v3_actionable_and_project(conn: sqlite3.Connection):
+    """v3: project scoping + retrieval ranking on atomic_memories; plan_id
+    linking goals/experiments back to a generated guidance plan."""
+    cur = conn.cursor()
+    for ddl in (
+        "ALTER TABLE atomic_memories ADD COLUMN project TEXT",
+        "ALTER TABLE atomic_memories ADD COLUMN retrieval_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE atomic_memories ADD COLUMN last_retrieved_at TEXT",
+        "ALTER TABLE goals ADD COLUMN plan_id TEXT",
+        "ALTER TABLE experiments ADD COLUMN plan_id TEXT",
+    ):
+        try:
+            cur.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+
 # Ordered list of (target_version, migration_callable) pairs. Each callable
 # receives an open sqlite3.Connection and upgrades the schema to target_version.
 # Version 1 is the baseline schema (created idempotently in init_db).
-MIGRATIONS = [(2, _migrate_v2_atomic_memories)]
+MIGRATIONS = [
+    (2, _migrate_v2_atomic_memories),
+    (3, _migrate_v3_actionable_and_project),
+]
 
 def resolve_db_path(db_path: str = None) -> str:
     """Resolves relative database paths to ~/.psyche/ folder, while leaving absolute paths intact."""
@@ -272,6 +292,10 @@ def init_db(db_path: str):
     
     # Create atomic memory tables (v2 schema)
     _create_atomic_memory_tables(conn)
+
+    # Apply v3 additive columns so fresh DBs converge with migrated ones
+    # (the ALTERs are idempotent via try/except inside).
+    _migrate_v3_actionable_and_project(conn)
 
     # Apply schema versioning / migrations now that all tables exist.
     _run_migrations(conn)
