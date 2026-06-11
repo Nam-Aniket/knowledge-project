@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 
 import numpy as np
@@ -110,6 +111,23 @@ def _remove_from_mem_index(db_path: str, memory_ids: list[int]):
         pass
 
 
+def project_key_for(cwd: str | None) -> str | None:
+    """Returns a stable project key for cwd: the git toplevel basename if cwd
+    is in a git repo, else the cwd basename. None when cwd is falsy."""
+    if not cwd:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return os.path.basename(result.stdout.strip())
+    except Exception:
+        pass
+    return os.path.basename(os.path.abspath(cwd))
+
+
 def _get_llm(llm=None):
     if llm is not None:
         return llm
@@ -161,9 +179,10 @@ def _find_duplicate(db_path: str, vector) -> int | None:
 
 
 def add_memory(fact: str, category: str = None, entities: list[str] = None,
-               agent_id: str = None, run_id: str = None,
+               agent_id: str = None, run_id: str = None, project: str = None,
                db_path: str = None, llm=None) -> dict:
-    """Stores a single atomic fact verbatim. Returns {id, fact, duplicate_of}."""
+    """Stores a single atomic fact verbatim. project=None means a global fact.
+    Returns {id, fact, duplicate_of}."""
     fact = (fact or "").strip()
     if not fact:
         raise ValueError("fact must be a non-empty string")
@@ -183,9 +202,9 @@ def add_memory(fact: str, category: str = None, entities: list[str] = None,
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO atomic_memories (fact, agent_id, run_id, category, embedding_blob, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (fact, agent_id, run_id, category, blob, now, now),
+            "INSERT INTO atomic_memories (fact, agent_id, run_id, category, project, embedding_blob, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (fact, agent_id, run_id, category, project, blob, now, now),
         )
         memory_id = cursor.lastrowid
         cursor.execute(
@@ -206,7 +225,7 @@ def add_memory(fact: str, category: str = None, entities: list[str] = None,
 
 
 def extract_and_store(transcript_text: str, agent_id: str = None, run_id: str = None,
-                      db_path: str = None, llm=None) -> list[dict]:
+                      project: str = None, db_path: str = None, llm=None) -> list[dict]:
     """LLM-extracts atomic facts from a transcript and stores them.
 
     Returns the list of stored facts. Returns [] without storing when no chat
@@ -238,6 +257,7 @@ def extract_and_store(transcript_text: str, agent_id: str = None, run_id: str = 
             entities=item.get("entities") if isinstance(item.get("entities"), list) else None,
             agent_id=agent_id,
             run_id=run_id,
+            project=project,
             db_path=db_path,
             llm=llm,
         )
@@ -261,9 +281,11 @@ def _fts_tokens(query: str) -> list[str]:
 
 def search_memories(query: str, agent_id: str = None, top: int = 8,
                     db_path: str = None, llm=None,
-                    min_score: float = DEFAULT_MIN_SCORE) -> list[dict]:
+                    min_score: float = DEFAULT_MIN_SCORE,
+                    project: str = None) -> list[dict]:
     """Hybrid search over live atomic facts. Returns [] on weak matches so
-    callers don't inject noise."""
+    callers don't inject noise. When project is given, returns that project's
+    facts plus global facts (project IS NULL), with project facts boosted."""
     resolved = resolve_db_path(db_path)
     if not os.path.exists(resolved):
         return []
@@ -335,30 +357,51 @@ def search_memories(query: str, agent_id: str = None, top: int = 8,
 
         placeholders = ",".join("?" for _ in ranked_ids)
         sql = (
-            f"SELECT id, fact, category, agent_id, updated_at FROM atomic_memories "
-            f"WHERE id IN ({placeholders}) AND superseded_by IS NULL"
+            f"SELECT id, fact, category, agent_id, updated_at, project, retrieval_count "
+            f"FROM atomic_memories WHERE id IN ({placeholders}) AND superseded_by IS NULL"
         )
         params = list(ranked_ids)
         if agent_id:
             sql += " AND agent_id = ?"
             params.append(agent_id)
+        if project:
+            sql += " AND (project = ? OR project IS NULL)"
+            params.append(project)
         rows = {r[0]: r for r in conn.execute(sql, params).fetchall()}
+
+        # Stable boost: same-project facts rank above globals at equal score.
+        if project:
+            for mid, row in rows.items():
+                if row[5] == project:
+                    scores[mid] = scores.get(mid, 0.0) + 0.01
+        ranked_ids = [mid for mid, _ in sorted(scores.items(), key=lambda kv: -kv[1])]
+
+        sim_by_id = dict(semantic)
+        results = []
+        for mid in ranked_ids:
+            if mid not in rows:
+                continue
+            _id, fact, category, agent, updated_at, row_project, retrieval_count = rows[mid]
+            results.append({
+                "id": _id, "fact": fact, "category": category,
+                "agent_id": agent, "updated_at": updated_at,
+                "project": row_project,
+                "similarity": round(sim_by_id.get(mid, 0.0), 3),
+            })
+            if len(results) >= top:
+                break
+
+        if results:
+            id_placeholders = ",".join("?" for _ in results)
+            conn.execute(
+                f"UPDATE atomic_memories SET retrieval_count = retrieval_count + 1, "
+                f"last_retrieved_at = ? WHERE id IN ({id_placeholders})",
+                [_now()] + [r["id"] for r in results],
+            )
+            conn.commit()
     finally:
         conn.close()
 
-    sim_by_id = dict(semantic)
-    results = []
-    for mid in ranked_ids:
-        if mid not in rows:
-            continue
-        _id, fact, category, agent, updated_at = rows[mid]
-        results.append({
-            "id": _id, "fact": fact, "category": category,
-            "agent_id": agent, "updated_at": updated_at,
-            "similarity": round(sim_by_id.get(mid, 0.0), 3),
-        })
-        if len(results) >= top:
-            break
     return results
 
 
@@ -459,24 +502,35 @@ def list_entities(db_path: str = None) -> list[dict]:
     return [{"entity": r[0], "count": r[1]} for r in rows]
 
 
-def standing_fact_rows(top: int = 12, db_path: str = None) -> list[dict]:
-    """Recent durable preference/decision/lesson facts for session-start injection."""
+def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None) -> list[dict]:
+    """Recent durable preference/decision/lesson facts for session-start
+    injection. With a project, returns that project's facts plus globals,
+    project facts first."""
     resolved = resolve_db_path(db_path)
     if not os.path.exists(resolved):
         return []
     conn = get_connection(resolved)
     try:
         try:
-            rows = conn.execute(
-                "SELECT id, fact, category, agent_id, updated_at FROM atomic_memories "
+            sql = (
+                "SELECT id, fact, category, agent_id, updated_at, project FROM atomic_memories "
                 "WHERE superseded_by IS NULL AND category IN ('preference','decision','lesson') "
-                "ORDER BY updated_at DESC LIMIT ?", (top,)
-            ).fetchall()
+            )
+            params = []
+            if project:
+                sql += "AND (project = ? OR project IS NULL) "
+                params.append(project)
+                sql += "ORDER BY (project IS NULL), updated_at DESC LIMIT ?"
+            else:
+                sql += "ORDER BY updated_at DESC LIMIT ?"
+            params.append(top)
+            rows = conn.execute(sql, params).fetchall()
         except sqlite3.OperationalError:
             return []
     finally:
         conn.close()
-    return [{"id": r[0], "fact": r[1], "category": r[2], "agent_id": r[3], "updated_at": r[4]}
+    return [{"id": r[0], "fact": r[1], "category": r[2], "agent_id": r[3],
+             "updated_at": r[4], "project": r[5]}
             for r in rows]
 
 

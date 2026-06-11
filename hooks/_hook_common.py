@@ -36,6 +36,10 @@ def read_payload() -> dict:
         return {}
 
 
+def cwd_from_payload(payload) -> str | None:
+    return payload.get("cwd") or payload.get("workspace") or None
+
+
 def ledger_path(session_id: str) -> str:
     safe = "".join(c for c in (session_id or "unknown") if c.isalnum() or c in "-_")
     return f"/tmp/psyche_mem_ledger_{safe}.json"

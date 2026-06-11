@@ -18,8 +18,10 @@ def main():
     if m:
         fact = " ".join(m.group(1).split())
         import memzero
+        project = memzero.project_key_for(hc.cwd_from_payload(payload))
         category = "preference" if re.search(r"(?i)\b(prefer|always|never|don'?t)\b", fact) else "fact"
-        result = memzero.add_memory(fact, category=category, agent_id="claude-code", run_id=session_id)
+        result = memzero.add_memory(fact, category=category, agent_id="claude-code",
+                                    run_id=session_id, project=project)
         if result["duplicate_of"] is not None:
             print(f"(Psyche memory: already stored as fact #{result['duplicate_of']}.)")
         else:
@@ -30,7 +32,8 @@ def main():
     if len(prompt) < 30 or prompt.startswith("/") or prompt.startswith("#"):
         return
     import memzero
-    results = memzero.search_memories(prompt, top=6)
+    project = memzero.project_key_for(hc.cwd_from_payload(payload))
+    results = memzero.search_memories(prompt, top=6, project=project)
     seen = hc.read_ledger(session_id)
     fresh = [r for r in results if r["id"] not in seen]
     if not fresh:

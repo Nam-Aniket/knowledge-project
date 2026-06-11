@@ -561,6 +561,10 @@ def main():
                                         "type": "string",
                                         "description": "Optional originating agent (e.g. 'claude-desktop', 'codex')"
                                     },
+                                    "project": {
+                                        "type": "string",
+                                        "description": "Optional project key scoping this fact (omit for a global fact)"
+                                    },
                                     "topic": {
                                         "type": "string",
                                         "description": "Optional topic/profile database name."
@@ -583,6 +587,10 @@ def main():
                                         "type": "integer",
                                         "description": "Max facts to return (default 8)",
                                         "default": 8
+                                    },
+                                    "project": {
+                                        "type": "string",
+                                        "description": "Optional project key: returns that project's facts plus globals, project facts boosted"
                                     },
                                     "topic": {
                                         "type": "string",
@@ -779,6 +787,7 @@ def main():
                             category=arguments.get("category"),
                             entities=arguments.get("entities"),
                             agent_id=arguments.get("agent_id"),
+                            project=arguments.get("project"),
                             db_path=db_path,
                         )
                         if result["duplicate_of"] is not None:
@@ -792,6 +801,7 @@ def main():
                         results = memzero.search_memories(
                             arguments.get("query"),
                             top=int(arguments.get("top", 8) or 8),
+                            project=arguments.get("project"),
                             db_path=db_path,
                         )
                         if results:

@@ -87,7 +87,9 @@ def main():
     import memzero
     text = transcript_text(path)
     llm = _resolve_llm()
-    stored = memzero.extract_and_store(text, agent_id="claude-code", run_id=session_id, llm=llm)
+    project = memzero.project_key_for(hc.cwd_from_payload(payload))
+    stored = memzero.extract_and_store(text, agent_id="claude-code", run_id=session_id,
+                                       project=project, llm=llm)
     hc.log(f"extract {session_id} ({payload.get('hook_event_name')}) via {getattr(llm, 'chat_model', '?')}: stored {len(stored)} facts")
 
 

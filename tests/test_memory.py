@@ -133,5 +133,82 @@ class TestMemoryEngine(unittest.TestCase):
         matches = index.search(q, 1)
         self.assertEqual(matches.keys[0], chunk_id)
 
+class FakeEmbedLLM:
+    """Deterministic embedding stub: exact-text vector mapping, no chat."""
+    provider = "fake"
+    chat_model = "none"
+
+    def __init__(self, mapping):
+        self.mapping = mapping
+
+    def get_embedding(self, text):
+        return self.mapping[text]
+
+
+class TestAtomicMemoryScoping(unittest.TestCase):
+    GLOBAL_FACT = "Deploys always run from the main branch"
+    PROJECT_FACT = "The alpha repo uses pnpm for package management"
+    QUERY = "how should I deploy and which package manager"
+
+    def setUp(self):
+        self.db_path = "test_memory_scoping.db"
+        self.resolved_db_path = db.resolve_db_path(self.db_path)
+        self.mem_index_path = os.path.splitext(self.resolved_db_path)[0] + ".mem.usearch"
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+        db.init_db(self.db_path)
+        # Orthogonal fact vectors (no dup/supersede interference); the query
+        # vector sits at ~0.707 similarity to both — above the 0.55 floor.
+        self.llm = FakeEmbedLLM({
+            self.GLOBAL_FACT: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.PROJECT_FACT: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.QUERY: [0.707, 0.707, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        })
+
+    def tearDown(self):
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+    def _seed(self):
+        import memzero
+        memzero.add_memory(self.GLOBAL_FACT, db_path=self.db_path, llm=self.llm)
+        memzero.add_memory(self.PROJECT_FACT, project="alpha", db_path=self.db_path, llm=self.llm)
+
+    def test_project_fact_scoping(self):
+        import memzero
+        self._seed()
+        alpha = memzero.search_memories(self.QUERY, project="alpha", db_path=self.db_path, llm=self.llm)
+        self.assertEqual({r["fact"] for r in alpha}, {self.GLOBAL_FACT, self.PROJECT_FACT})
+        beta = memzero.search_memories(self.QUERY, project="beta", db_path=self.db_path, llm=self.llm)
+        self.assertEqual({r["fact"] for r in beta}, {self.GLOBAL_FACT})
+
+    def test_project_boost_orders_first(self):
+        import memzero
+        self._seed()
+        alpha = memzero.search_memories(self.QUERY, project="alpha", db_path=self.db_path, llm=self.llm)
+        self.assertEqual(alpha[0]["fact"], self.PROJECT_FACT)
+
+    def test_retrieval_count_increments(self):
+        import memzero
+        self._seed()
+        results = memzero.search_memories(self.QUERY, db_path=self.db_path, llm=self.llm)
+        self.assertTrue(results)
+        conn = db.get_connection(self.resolved_db_path)
+        try:
+            count = conn.execute(
+                "SELECT retrieval_count FROM atomic_memories WHERE id = ?", (results[0]["id"],)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertGreaterEqual(count, 1)
+
+    def test_project_key_for_basename(self):
+        import memzero
+        self.assertEqual(memzero.project_key_for("/tmp/some/dir"), "dir")
+        self.assertIsNone(memzero.project_key_for(None))
+
+
 if __name__ == "__main__":
     unittest.main()

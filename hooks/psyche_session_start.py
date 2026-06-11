@@ -7,7 +7,8 @@ def main():
     payload = hc.read_payload()
     session_id = payload.get("session_id", "")
     import memzero
-    rows = memzero.standing_fact_rows(top=12)
+    project = memzero.project_key_for(hc.cwd_from_payload(payload))
+    rows = memzero.standing_fact_rows(top=12, project=project)
     if not rows:
         return
     text = memzero.format_facts(rows, max_chars=1500)
