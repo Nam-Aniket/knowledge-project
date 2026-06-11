@@ -551,6 +551,97 @@ def list_entities(db_path: str = None) -> list[dict]:
     return [{"entity": r[0], "count": r[1]} for r in rows]
 
 
+def list_memories(limit: int = 50, project: str = None, category: str = None,
+                  include_superseded: bool = False, db_path: str = None) -> list[dict]:
+    """Lists facts (live by default), newest first."""
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return []
+    conn = get_connection(resolved)
+    try:
+        sql = ("SELECT id, fact, category, project, retrieval_count, updated_at, superseded_by "
+               "FROM atomic_memories WHERE 1=1 ")
+        params = []
+        if not include_superseded:
+            sql += "AND superseded_by IS NULL "
+        if project:
+            sql += "AND project = ? "
+            params.append(project)
+        if category:
+            sql += "AND category = ? "
+            params.append(category)
+        sql += "ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    finally:
+        conn.close()
+    return [{"id": r[0], "fact": r[1], "category": r[2], "project": r[3],
+             "retrieval_count": r[4], "updated_at": r[5], "superseded_by": r[6]}
+            for r in rows]
+
+
+def prune_stale(weeks: int = 8, dry_run: bool = False, db_path: str = None) -> list[int]:
+    """Deletes (or, dry_run, lists) live facts never retrieved and not updated
+    in the last `weeks` weeks. Returns the affected ids."""
+    from datetime import timedelta
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(weeks=weeks)).isoformat()
+    conn = get_connection(resolved)
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT id FROM atomic_memories WHERE superseded_by IS NULL "
+                "AND retrieval_count = 0 AND updated_at < ?", (cutoff,)
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        ids = [r[0] for r in rows]
+        if not dry_run and ids:
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(f"DELETE FROM atomic_memories WHERE id IN ({placeholders})", ids)
+            conn.execute(f"DELETE FROM atomic_memories_fts WHERE memory_id IN ({placeholders})", ids)
+            conn.commit()
+    finally:
+        conn.close()
+    if not dry_run and ids:
+        _remove_from_mem_index(resolved, ids)
+    return ids
+
+
+def stats(db_path: str = None) -> dict:
+    """Returns {total, by_category, by_project, total_retrievals, never_retrieved}."""
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return {"total": 0, "by_category": {}, "by_project": {}, "total_retrievals": 0, "never_retrieved": 0}
+    conn = get_connection(resolved)
+    try:
+        try:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM atomic_memories WHERE superseded_by IS NULL").fetchone()[0]
+            by_category = dict(conn.execute(
+                "SELECT COALESCE(category,'(none)'), COUNT(*) FROM atomic_memories "
+                "WHERE superseded_by IS NULL GROUP BY category").fetchall())
+            by_project = dict(conn.execute(
+                "SELECT COALESCE(project,'(global)'), COUNT(*) FROM atomic_memories "
+                "WHERE superseded_by IS NULL GROUP BY project ORDER BY COUNT(*) DESC LIMIT 5").fetchall())
+            total_retrievals = conn.execute(
+                "SELECT COALESCE(SUM(retrieval_count),0) FROM atomic_memories").fetchone()[0]
+            never_retrieved = conn.execute(
+                "SELECT COUNT(*) FROM atomic_memories WHERE superseded_by IS NULL "
+                "AND retrieval_count = 0").fetchone()[0]
+        except sqlite3.OperationalError:
+            return {"total": 0, "by_category": {}, "by_project": {}, "total_retrievals": 0, "never_retrieved": 0}
+    finally:
+        conn.close()
+    return {"total": total, "by_category": by_category, "by_project": by_project,
+            "total_retrievals": total_retrievals, "never_retrieved": never_retrieved}
+
+
 def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None) -> list[dict]:
     """Recent durable preference/decision/lesson facts for session-start
     injection. With a project, returns that project's facts plus globals,

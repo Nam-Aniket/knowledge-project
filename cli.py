@@ -79,6 +79,9 @@ def main():
     elif subcommand == "rules":
         import guidance
         guidance.rules_main()
+    elif subcommand == "mem":
+        import mem_cli
+        mem_cli.main()
     elif subcommand == "connect":
         import connect
         import argparse

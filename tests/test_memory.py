@@ -210,6 +210,72 @@ class TestAtomicMemoryScoping(unittest.TestCase):
         self.assertIsNone(memzero.project_key_for(None))
 
 
+class TestMemCliHelpers(unittest.TestCase):
+    def setUp(self):
+        self.db_path = "test_memory_cli.db"
+        self.resolved_db_path = db.resolve_db_path(self.db_path)
+        self.mem_index_path = os.path.splitext(self.resolved_db_path)[0] + ".mem.usearch"
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+        db.init_db(self.db_path)
+        self.llm = FakeEmbedLLM({})
+
+    def tearDown(self):
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+    def _add(self, fact, **kwargs):
+        import memzero
+
+        class NoEmbed:
+            provider = "none"
+            chat_model = "none"
+        return memzero.add_memory(fact, db_path=self.db_path, llm=NoEmbed(), **kwargs)
+
+    def test_list_memories_filters(self):
+        import memzero
+        self._add("Alpha uses pnpm", project="alpha", category="fact")
+        self._add("User prefers tabs", project="beta", category="preference")
+        self._add("Global lesson about retries", category="lesson")
+
+        alpha = memzero.list_memories(project="alpha", db_path=self.db_path)
+        self.assertEqual([r["fact"] for r in alpha], ["Alpha uses pnpm"])
+        prefs = memzero.list_memories(category="preference", db_path=self.db_path)
+        self.assertEqual([r["fact"] for r in prefs], ["User prefers tabs"])
+        everything = memzero.list_memories(db_path=self.db_path)
+        self.assertEqual(len(everything), 3)
+
+    def test_prune_stale_removes_unretrieved_old(self):
+        import memzero
+        old = self._add("Stale never-retrieved fact")
+        kept = self._add("Recently retrieved fact")
+        conn = db.get_connection(self.resolved_db_path)
+        try:
+            conn.execute(
+                "UPDATE atomic_memories SET retrieval_count = 3 WHERE id = ?", (kept["id"],)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        ids = memzero.prune_stale(weeks=0, db_path=self.db_path)
+        self.assertIn(old["id"], ids)
+        self.assertNotIn(kept["id"], ids)
+        remaining = {r["id"] for r in memzero.list_memories(db_path=self.db_path)}
+        self.assertNotIn(old["id"], remaining)
+        self.assertIn(kept["id"], remaining)
+
+    def test_stats_shape(self):
+        import memzero
+        self._add("A fact", category="fact")
+        s = memzero.stats(db_path=self.db_path)
+        for key in ("total", "by_category", "never_retrieved"):
+            self.assertIn(key, s)
+        self.assertEqual(s["total"], 1)
+
+
 class TestSuperseding(unittest.TestCase):
     OLD_FACT = "Node 20 is required for the deploy pipeline"
     NEW_FACT = "Node 22 is required for the deploy pipeline"
