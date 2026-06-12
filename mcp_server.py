@@ -10,6 +10,10 @@ import hashlib
 import re
 import traceback
 
+# Single source of truth for the Psyche version. pyproject.toml, package.json,
+# and the README badge are manual mirrors of this value.
+__version__ = "0.7.0"
+
 # Save real stdout and redirect standard output to stderr
 real_stdout = sys.stdout
 sys.stdout = sys.stderr
@@ -274,7 +278,7 @@ def main():
                     },
                     "serverInfo": {
                         "name": "psyche-mcp",
-                        "version": "0.6.0"
+                        "version": __version__
                     }
                 }
             elif method == "notifications/initialized":
