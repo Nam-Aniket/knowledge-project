@@ -454,13 +454,19 @@ def search_memories(query: str, agent_id: str = None, top: int = 8,
     return results
 
 
-def format_facts(results: list[dict], max_chars: int = 3000) -> str:
-    """Formats facts as compact bullets for context injection."""
+def format_facts(results: list[dict], max_chars: int = 3000, include_date: bool = True) -> str:
+    """Formats facts as compact bullets for context injection.
+
+    include_date=False omits the date from the suffix (cache-stable rendering).
+    """
     lines = []
     total = 0
     for r in results:
-        date = (r.get("updated_at") or "")[:10]
-        suffix = f" ({r['category']}, {date})" if r.get("category") else (f" ({date})" if date else "")
+        if include_date:
+            date = (r.get("updated_at") or "")[:10]
+            suffix = f" ({r['category']}, {date})" if r.get("category") else (f" ({date})" if date else "")
+        else:
+            suffix = f" ({r['category']})" if r.get("category") else ""
         line = f"- {r['fact']}{suffix}"
         if total + len(line) > max_chars:
             break
@@ -644,13 +650,25 @@ def stats(db_path: str = None) -> dict:
 
 MEM_LEDGER_PATH = os.path.expanduser("~/.psyche/mem_ledger.jsonl")
 
+CACHE_DISCOUNT = {
+    "anthropic": 0.9,
+    "openai": 0.5,
+    "gemini": 0.75,
+    "ollama": 0.0,
+    "local": 0.0,
+    "none": 0.0,
+}
+
 
 def ledger_summary(path: str = None) -> dict:
     """Summarizes the hook injection ledger: total injections, facts and chars
     injected, and tokens injected estimated as chars/4 — which equals the
-    re-derivation avoided (an injected fact is one the agent didn't re-derive)."""
+    re-derivation avoided (an injected fact is one the agent didn't re-derive).
+    Also computes cache-exposure metrics and a per-provider modeled savings estimate."""
     path = path or MEM_LEDGER_PATH
     total_injections = total_facts = total_chars = 0
+    session_start_count = prompt_submit_count = prompt_submit_facts = 0
+    block_hashes: set = set()
     try:
         with open(path) as f:
             for line in f:
@@ -661,20 +679,50 @@ def ledger_summary(path: str = None) -> dict:
                 total_injections += 1
                 total_facts += int(entry.get("count", 0))
                 total_chars += int(entry.get("chars", 0))
+                event = entry.get("event", "")
+                if event == "session_start":
+                    session_start_count += 1
+                    bh = entry.get("block_hash")
+                    if bh:
+                        block_hashes.add(bh)
+                elif event == "prompt_submit":
+                    prompt_submit_count += 1
+                    prompt_submit_facts += int(entry.get("count", 0))
     except OSError:
         pass
+    distinct_session_blocks = len(block_hashes)
+    session_block_changes = max(0, distinct_session_blocks - 1)
+    tokens_injected = total_chars // 4
+    provider = (
+        os.getenv("CHAT_PROVIDER", "").lower()
+        or os.getenv("LLM_PROVIDER", "anthropic").lower()
+    )
+    discount = CACHE_DISCOUNT.get(provider, CACHE_DISCOUNT["anthropic"])
+    estimated_savings_tokens = int(tokens_injected * discount)
     return {
         "total_injections": total_injections,
         "total_facts": total_facts,
         "total_chars": total_chars,
-        "tokens_injected": total_chars // 4,
+        "tokens_injected": tokens_injected,
+        "session_start_count": session_start_count,
+        "distinct_session_blocks": distinct_session_blocks,
+        "session_block_changes": session_block_changes,
+        "prompt_submit_count": prompt_submit_count,
+        "prompt_submit_facts": prompt_submit_facts,
+        "estimated_savings_tokens": estimated_savings_tokens,
+        "cache_discount_used": discount,
+        "cache_provider_used": provider or "anthropic",
     }
 
 
-def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None) -> list[dict]:
-    """Recent durable preference/decision/lesson facts for session-start
-    injection. With a project, returns that project's facts plus globals,
-    project facts first."""
+def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None,
+                       stable: bool = False) -> list[dict]:
+    """Durable preference/decision/lesson facts for session-start injection.
+
+    stable=True orders by id ASC (cache-stable; new facts append, existing
+    order never changes). stable=False keeps the legacy updated_at DESC order.
+    With a project, project facts are listed before globals in both modes.
+    """
     resolved = resolve_db_path(db_path)
     if not os.path.exists(resolved):
         return []
@@ -689,9 +737,15 @@ def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None) 
             if project:
                 sql += "AND (project = ? OR project IS NULL) "
                 params.append(project)
-                sql += "ORDER BY (project IS NULL), updated_at DESC LIMIT ?"
+                if stable:
+                    sql += "ORDER BY (project IS NULL), id ASC LIMIT ?"
+                else:
+                    sql += "ORDER BY (project IS NULL), updated_at DESC LIMIT ?"
             else:
-                sql += "ORDER BY updated_at DESC LIMIT ?"
+                if stable:
+                    sql += "ORDER BY id ASC LIMIT ?"
+                else:
+                    sql += "ORDER BY updated_at DESC LIMIT ?"
             params.append(top)
             rows = conn.execute(sql, params).fetchall()
         except sqlite3.OperationalError:

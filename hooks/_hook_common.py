@@ -3,6 +3,7 @@
 Hooks must never break the user's session: every entry point swallows all
 exceptions and exits 0. Debug output goes to ~/.psyche/memzero_hook.log.
 """
+import hashlib
 import json
 import os
 import sys
@@ -43,19 +44,24 @@ def cwd_from_payload(payload) -> str | None:
 MEM_LEDGER_PATH = os.path.expanduser("~/.psyche/mem_ledger.jsonl")
 
 
-def append_ledger(event: str, session_id: str, count: int, chars: int, path: str = None):
-    """Appends one JSON line: {ts, event, session_id, count, chars}.
+def append_ledger(event: str, session_id: str, count: int, chars: int, path: str = None,
+                  block_hash: str = None):
+    """Appends one JSON line: {ts, event, session_id, count, chars[, block_hash]}.
+    block_hash is included only when provided (never written as null).
     Swallows all errors (hooks must never break)."""
     from datetime import datetime, timezone
     try:
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            "session_id": session_id,
+            "count": count,
+            "chars": chars,
+        }
+        if block_hash is not None:
+            entry["block_hash"] = block_hash
         with open(path or MEM_LEDGER_PATH, "a") as f:
-            f.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "event": event,
-                "session_id": session_id,
-                "count": count,
-                "chars": chars,
-            }) + "\n")
+            f.write(json.dumps(entry) + "\n")
     except Exception:
         pass
 
@@ -71,6 +77,11 @@ def read_ledger(session_id: str) -> set:
             return set(json.load(f))
     except Exception:
         return set()
+
+
+def stable_block_hash(text: str) -> str:
+    """SHA-1 hex digest (12 chars) of the injection text — used as a cache-exposure key."""
+    return hashlib.sha1(text.encode()).hexdigest()[:12]
 
 
 def write_ledger(session_id: str, ids: set):

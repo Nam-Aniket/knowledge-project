@@ -3,7 +3,7 @@
 <div align="center">
   <p><strong>Give any AI assistant searchable, cited access to your private notes and documents.</strong></p>
 
-  [![Version](https://img.shields.io/badge/version-0.5.0-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
+  [![Version](https://img.shields.io/badge/version-0.7.0-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![Model Context Protocol](https://img.shields.io/badge/MCP-Enabled-orange.svg?style=for-the-badge)](https://modelcontextprotocol.io)

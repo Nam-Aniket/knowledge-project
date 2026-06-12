@@ -300,6 +300,60 @@ class TestLedger(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_ledger_block_changes(self):
+        """3 session_start lines, two sharing a hash + one different → distinct==2, changes==1."""
+        import sys as _sys
+        import tempfile
+        import json
+        import memzero
+        hooks_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks")
+        _sys.path.insert(0, hooks_dir)
+        try:
+            import _hook_common as hc
+        finally:
+            _sys.path.remove(hooks_dir)
+
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        try:
+            hc.append_ledger("session_start", "s1", 3, 400, path=path, block_hash="aabbcc112233")
+            hc.append_ledger("session_start", "s2", 3, 400, path=path, block_hash="aabbcc112233")
+            hc.append_ledger("session_start", "s3", 3, 400, path=path, block_hash="ddeeff445566")
+            summary = memzero.ledger_summary(path=path)
+            self.assertEqual(summary["session_start_count"], 3)
+            self.assertEqual(summary["distinct_session_blocks"], 2)
+            self.assertEqual(summary["session_block_changes"], 1)
+        finally:
+            os.unlink(path)
+
+    def test_ledger_legacy_no_block_hash(self):
+        """Pre-v0.7 lines without block_hash summarize without error."""
+        import sys as _sys
+        import tempfile
+        import json
+        import memzero
+        hooks_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks")
+        _sys.path.insert(0, hooks_dir)
+        try:
+            import _hook_common as hc
+        finally:
+            _sys.path.remove(hooks_dir)
+
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        try:
+            # Write legacy lines without block_hash
+            hc.append_ledger("session_start", "s1", 2, 300, path=path)
+            hc.append_ledger("prompt_submit", "s1", 1, 200, path=path)
+            summary = memzero.ledger_summary(path=path)
+            self.assertEqual(summary["session_start_count"], 1)
+            self.assertEqual(summary["distinct_session_blocks"], 0)
+            self.assertEqual(summary["session_block_changes"], 0)
+            self.assertIn("estimated_savings_tokens", summary)
+            self.assertIsInstance(summary["estimated_savings_tokens"], int)
+        finally:
+            os.unlink(path)
+
 
 class TestSuperseding(unittest.TestCase):
     OLD_FACT = "Node 20 is required for the deploy pipeline"

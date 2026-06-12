@@ -396,5 +396,97 @@ class TestGuidanceLayer(unittest.TestCase):
         self.assertIn("MCP active experiment", result)
         self.assertIn("MCP active rule", result)
 
+class TestSynthesisPack(unittest.TestCase):
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        db.init_db(self.db_path)
+
+    def tearDown(self):
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def _no_chat_llm(self):
+        mock_llm = mock.Mock()
+        mock_llm.provider = "none"
+        mock_llm.chat_model = "none"
+        mock_llm.get_embedding.return_value = None
+        return mock_llm
+
+    @mock.patch('query.perform_hybrid_search')
+    @mock.patch('query.retrieve_concept_context')
+    def test_build_synthesis_pack_structure(self, mock_concept, mock_search):
+        """build_synthesis_pack returns mode==synthesis_pack with all required keys."""
+        mock_search.return_value = []
+        mock_concept.return_value = ""
+        from plan_schema import PLAN_SCHEMA_DESCRIPTION
+        pack = guidance.build_synthesis_pack("Save money", "wealth", self.db_path, self._no_chat_llm())
+        self.assertEqual(pack["mode"], "synthesis_pack")
+        self.assertTrue(pack["instruction"])
+        self.assertEqual(pack["schema"], PLAN_SCHEMA_DESCRIPTION)
+        ctx = pack["context"]
+        for key in ("retrieved_knowledge", "graph_context", "known_facts", "active_goals",
+                    "active_experiments", "personal_rules", "diagnostic_questions", "available_metrics"):
+            self.assertIn(key, ctx)
+
+    @mock.patch('query.perform_hybrid_search')
+    @mock.patch('query.retrieve_concept_context')
+    def test_generate_guidance_tool_no_chat_returns_synthesis_pack(self, mock_concept, mock_search):
+        """generate_guidance_tool with no-chat LLM returns JSON with mode==synthesis_pack."""
+        mock_search.return_value = []
+        mock_concept.return_value = ""
+        mock_llm = self._no_chat_llm()
+        with mock.patch('guidance.LLMClient', return_value=mock_llm), \
+             mock.patch('guidance.resolve_db_path', return_value=self.db_path):
+            result = guidance.generate_guidance_tool("Save money", domain="wealth")
+        parsed = json.loads(result)
+        self.assertEqual(parsed["mode"], "synthesis_pack")
+
+    def test_submit_guidance_plan_materializes(self):
+        """submit_guidance_plan_tool with a valid 2-action plan creates goal + experiments sharing plan_id."""
+        plan = _valid_plan_json("Improve outreach", "business")
+        plan_str = json.dumps(plan)
+        with mock.patch('guidance.resolve_db_path', return_value=self.db_path):
+            result_str = guidance.submit_guidance_plan_tool(plan_str)
+        result = json.loads(result_str)
+        self.assertEqual(result["status"], "materialized")
+        self.assertIn("goal_id", result)
+        self.assertIn("experiment_ids", result)
+        self.assertEqual(len(result["experiment_ids"]), 2)
+        self.assertEqual(result["synthesized_by"], "host-agent")
+
+        conn = db.get_connection(self.db_path)
+        goals = conn.execute("SELECT id FROM goals WHERE plan_id = ?", (result["plan_id"],)).fetchall()
+        self.assertEqual(len(goals), 1)
+        exps = conn.execute("SELECT id FROM experiments WHERE plan_id = ?", (result["plan_id"],)).fetchall()
+        self.assertEqual(len(exps), 2)
+        conn.close()
+
+    def test_submit_guidance_plan_rejects_garbage(self):
+        """submit_guidance_plan_tool with garbage input returns error, no goal created."""
+        with mock.patch('guidance.resolve_db_path', return_value=self.db_path):
+            result_str = guidance.submit_guidance_plan_tool("not json at all")
+        result = json.loads(result_str)
+        self.assertIn("error", result)
+        conn = db.get_connection(self.db_path)
+        goals = conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0]
+        conn.close()
+        self.assertEqual(goals, 0)
+
+    def test_submit_guidance_plan_dedup(self):
+        """Submitting the same plan twice returns duplicate on the second call, goal count stays 1."""
+        plan = _valid_plan_json("Improve outreach", "business")
+        plan_str = json.dumps(plan)
+        with mock.patch('guidance.resolve_db_path', return_value=self.db_path):
+            r1 = json.loads(guidance.submit_guidance_plan_tool(plan_str))
+            r2 = json.loads(guidance.submit_guidance_plan_tool(plan_str))
+        self.assertEqual(r1["status"], "materialized")
+        self.assertEqual(r2["status"], "duplicate")
+        self.assertEqual(r2["goal_id"], r1["goal_id"])
+        conn = db.get_connection(self.db_path)
+        count = conn.execute("SELECT COUNT(*) FROM goals").fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

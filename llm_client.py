@@ -107,7 +107,27 @@ def run_setup_wizard(env_path: str):
         provider = "none"
         embed_model = "none"
         chat_model = "none"
-        
+
+    # For local/none providers, optionally pair a chat model
+    chat_provider = ""
+    chat_provider_model = ""
+    chat_provider_key = ""
+    if choice in ("4", "5"):
+        cp = Prompt.ask(
+            "Pair a chat model for guidance/check-in? (ollama/gemini/openai/none)",
+            default="none"
+        ).lower()
+        if cp in ("ollama", "gemini", "openai"):
+            chat_provider = cp
+            if cp == "ollama":
+                chat_provider_model = Prompt.ask("Enter Ollama chat model name", default="llama3")
+            elif cp == "openai":
+                chat_provider_model = Prompt.ask("Enter OpenAI chat model name", default="gpt-4o-mini")
+                chat_provider_key = Prompt.ask("Enter your OpenAI API Key", password=True)
+            elif cp == "gemini":
+                chat_provider_model = Prompt.ask("Enter Gemini chat model name", default="gemini-1.5-flash")
+                chat_provider_key = Prompt.ask("Enter your Gemini API Key", password=True)
+
     # Write .env file
     try:
         env_dir = os.path.dirname(env_path)
@@ -132,9 +152,25 @@ def run_setup_wizard(env_path: str):
             elif provider == "local":
                 f.write(f"EMBED_MODEL={embed_model}\n")
                 f.write(f"CHAT_MODEL={chat_model}\n")
+                if chat_provider:
+                    f.write(f"CHAT_PROVIDER={chat_provider}\n")
+                    f.write(f"CHAT_MODEL={chat_provider_model}\n")
+                    if chat_provider_key:
+                        if chat_provider == "openai":
+                            f.write(f"OPENAI_API_KEY={chat_provider_key}\n")
+                        elif chat_provider == "gemini":
+                            f.write(f"GEMINI_API_KEY={chat_provider_key}\n")
             elif provider == "none":
                 f.write(f"EMBED_MODEL={embed_model}\n")
                 f.write(f"CHAT_MODEL={chat_model}\n")
+                if chat_provider:
+                    f.write(f"CHAT_PROVIDER={chat_provider}\n")
+                    f.write(f"CHAT_MODEL={chat_provider_model}\n")
+                    if chat_provider_key:
+                        if chat_provider == "openai":
+                            f.write(f"OPENAI_API_KEY={chat_provider_key}\n")
+                        elif chat_provider == "gemini":
+                            f.write(f"GEMINI_API_KEY={chat_provider_key}\n")
                 
         console.print(f"\n✨ [bold green]Configuration saved successfully to {env_path}![/bold green]\n")
         # Reload environment variables
@@ -188,6 +224,25 @@ class LLMClient:
         elif self.provider == "gemini" and not self.gemini_key:
             raise ValueError("LLM_PROVIDER is set to 'gemini' but GEMINI_API_KEY is not configured in .env.")
 
+        # Chat provider — may differ from embedding provider
+        chat_provider = os.getenv("CHAT_PROVIDER", "").lower() or self.provider
+        self.chat_provider = chat_provider
+        if chat_provider in ("none", "local", "offline"):
+            self.chat_model = "none"
+        elif chat_provider == "ollama":
+            self.chat_model = os.getenv("CHAT_MODEL") or "llama3"
+        elif chat_provider == "openai":
+            self.chat_model = os.getenv("CHAT_MODEL") or "gpt-4o-mini"
+            if not self.openai_key:
+                raise ValueError("CHAT_PROVIDER is set to 'openai' but OPENAI_API_KEY is not configured in .env.")
+        elif chat_provider == "gemini":
+            self.chat_model = os.getenv("CHAT_MODEL") or "gemini-1.5-flash"
+            if not self.gemini_key:
+                raise ValueError("CHAT_PROVIDER is set to 'gemini' but GEMINI_API_KEY is not configured in .env.")
+        else:
+            # Unknown provider — treat as no-chat
+            self.chat_model = "none"
+
     def get_embedding(self, text: str) -> list[float]:
         """Generates a single text embedding vector."""
         if self.provider == "openai":
@@ -217,9 +272,9 @@ class LLMClient:
         """Generates a chat completion response from the configured LLM."""
         if self.chat_model == "none":
             raise RuntimeError("Chat completion is disabled when chat model is 'none'.")
-        if self.provider == "openai":
+        if self.chat_provider == "openai":
             return self._generate_openai_completion(system_instruction, prompt)
-        elif self.provider == "ollama":
+        elif self.chat_provider == "ollama":
             return self._generate_ollama_completion(system_instruction, prompt)
         else:
             return self._generate_gemini_completion(system_instruction, prompt)
