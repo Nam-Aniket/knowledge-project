@@ -650,13 +650,25 @@ def stats(db_path: str = None) -> dict:
 
 MEM_LEDGER_PATH = os.path.expanduser("~/.psyche/mem_ledger.jsonl")
 
+CACHE_DISCOUNT = {
+    "anthropic": 0.9,
+    "openai": 0.5,
+    "gemini": 0.75,
+    "ollama": 0.0,
+    "local": 0.0,
+    "none": 0.0,
+}
+
 
 def ledger_summary(path: str = None) -> dict:
     """Summarizes the hook injection ledger: total injections, facts and chars
     injected, and tokens injected estimated as chars/4 — which equals the
-    re-derivation avoided (an injected fact is one the agent didn't re-derive)."""
+    re-derivation avoided (an injected fact is one the agent didn't re-derive).
+    Also computes cache-exposure metrics and a per-provider modeled savings estimate."""
     path = path or MEM_LEDGER_PATH
     total_injections = total_facts = total_chars = 0
+    session_start_count = prompt_submit_count = prompt_submit_facts = 0
+    block_hashes: set = set()
     try:
         with open(path) as f:
             for line in f:
@@ -667,13 +679,39 @@ def ledger_summary(path: str = None) -> dict:
                 total_injections += 1
                 total_facts += int(entry.get("count", 0))
                 total_chars += int(entry.get("chars", 0))
+                event = entry.get("event", "")
+                if event == "session_start":
+                    session_start_count += 1
+                    bh = entry.get("block_hash")
+                    if bh:
+                        block_hashes.add(bh)
+                elif event == "prompt_submit":
+                    prompt_submit_count += 1
+                    prompt_submit_facts += int(entry.get("count", 0))
     except OSError:
         pass
+    distinct_session_blocks = len(block_hashes)
+    session_block_changes = max(0, distinct_session_blocks - 1)
+    tokens_injected = total_chars // 4
+    provider = (
+        os.getenv("CHAT_PROVIDER", "").lower()
+        or os.getenv("LLM_PROVIDER", "anthropic").lower()
+    )
+    discount = CACHE_DISCOUNT.get(provider, CACHE_DISCOUNT["anthropic"])
+    estimated_savings_tokens = int(tokens_injected * discount)
     return {
         "total_injections": total_injections,
         "total_facts": total_facts,
         "total_chars": total_chars,
-        "tokens_injected": total_chars // 4,
+        "tokens_injected": tokens_injected,
+        "session_start_count": session_start_count,
+        "distinct_session_blocks": distinct_session_blocks,
+        "session_block_changes": session_block_changes,
+        "prompt_submit_count": prompt_submit_count,
+        "prompt_submit_facts": prompt_submit_facts,
+        "estimated_savings_tokens": estimated_savings_tokens,
+        "cache_discount_used": discount,
+        "cache_provider_used": provider or "anthropic",
     }
 
 

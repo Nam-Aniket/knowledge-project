@@ -44,19 +44,24 @@ def cwd_from_payload(payload) -> str | None:
 MEM_LEDGER_PATH = os.path.expanduser("~/.psyche/mem_ledger.jsonl")
 
 
-def append_ledger(event: str, session_id: str, count: int, chars: int, path: str = None):
-    """Appends one JSON line: {ts, event, session_id, count, chars}.
+def append_ledger(event: str, session_id: str, count: int, chars: int, path: str = None,
+                  block_hash: str = None):
+    """Appends one JSON line: {ts, event, session_id, count, chars[, block_hash]}.
+    block_hash is included only when provided (never written as null).
     Swallows all errors (hooks must never break)."""
     from datetime import datetime, timezone
     try:
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            "session_id": session_id,
+            "count": count,
+            "chars": chars,
+        }
+        if block_hash is not None:
+            entry["block_hash"] = block_hash
         with open(path or MEM_LEDGER_PATH, "a") as f:
-            f.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "event": event,
-                "session_id": session_id,
-                "count": count,
-                "chars": chars,
-            }) + "\n")
+            f.write(json.dumps(entry) + "\n")
     except Exception:
         pass
 

@@ -137,6 +137,16 @@ def _print_ledger_section():
         f"tokens injected: ~{summary['tokens_injected']} (estimate, ~chars/4), "
         f"re-derivation avoided: ~{summary['tokens_injected']} tokens"
     )
+    console.print(
+        f"[bold]Cache exposure[/bold] — "
+        f"block changes: {summary.get('session_block_changes', 0)} across "
+        f"{summary.get('session_start_count', 0)} sessions (lower is better) · "
+        f"prompt facts: {summary.get('prompt_submit_facts', 0)} over "
+        f"{summary.get('prompt_submit_count', 0)} turns · "
+        f"modeled savings: ~{summary.get('estimated_savings_tokens', 0)} tokens "
+        f"(modeled estimate, provider: {summary.get('cache_provider_used', 'anthropic')}, "
+        f"discount: {summary.get('cache_discount_used', 0.9):.0%})"
+    )
 
 
 if __name__ == "__main__":
