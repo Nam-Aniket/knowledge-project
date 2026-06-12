@@ -1,5 +1,7 @@
 # Psyche memory protocol (drop-in block for agent instruction files)
 
+> **💡 Tip:** You can automate this setup by running `psyche connect <client>` (e.g., `psyche connect codex` or `psyche connect claude-code`). This will automatically inject the MCP server configuration and this protocol block into your agent's config.
+
 Paste this into the global instruction file of any MCP-capable coding agent
 (`~/.codex/AGENTS.md` for Codex, `~/.gemini/GEMINI.md` for Antigravity / Gemini
 CLI, a project `AGENTS.md` for anything else). Replace `<agent>` with an
@@ -30,6 +32,7 @@ During work, call `add_memory` (with `agent_id: "<agent>"`) when:
 Rules:
 - One self-contained sentence per fact; include relevant `entities`
   (tools, project names).
+- **Project Scoping:** `add_memory` and `search_memories` support an optional `project` parameter to scope facts. Use it when a fact applies only to the current repository.
 - Never store secrets, API keys, file contents, or anything derivable from
   the repository itself.
 - Do not announce these calls; just make them.

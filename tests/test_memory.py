@@ -133,5 +133,239 @@ class TestMemoryEngine(unittest.TestCase):
         matches = index.search(q, 1)
         self.assertEqual(matches.keys[0], chunk_id)
 
+class FakeEmbedLLM:
+    """Deterministic embedding stub: exact-text vector mapping, no chat."""
+    provider = "fake"
+    chat_model = "none"
+
+    def __init__(self, mapping):
+        self.mapping = mapping
+
+    def get_embedding(self, text):
+        return self.mapping[text]
+
+
+class TestAtomicMemoryScoping(unittest.TestCase):
+    GLOBAL_FACT = "Deploys always run from the main branch"
+    PROJECT_FACT = "The alpha repo uses pnpm for package management"
+    QUERY = "how should I deploy and which package manager"
+
+    def setUp(self):
+        self.db_path = "test_memory_scoping.db"
+        self.resolved_db_path = db.resolve_db_path(self.db_path)
+        self.mem_index_path = os.path.splitext(self.resolved_db_path)[0] + ".mem.usearch"
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+        db.init_db(self.db_path)
+        # Orthogonal fact vectors (no dup/supersede interference); the query
+        # vector sits at ~0.707 similarity to both — above the 0.55 floor.
+        self.llm = FakeEmbedLLM({
+            self.GLOBAL_FACT: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.PROJECT_FACT: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.QUERY: [0.707, 0.707, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        })
+
+    def tearDown(self):
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+    def _seed(self):
+        import memzero
+        memzero.add_memory(self.GLOBAL_FACT, db_path=self.db_path, llm=self.llm)
+        memzero.add_memory(self.PROJECT_FACT, project="alpha", db_path=self.db_path, llm=self.llm)
+
+    def test_project_fact_scoping(self):
+        import memzero
+        self._seed()
+        alpha = memzero.search_memories(self.QUERY, project="alpha", db_path=self.db_path, llm=self.llm)
+        self.assertEqual({r["fact"] for r in alpha}, {self.GLOBAL_FACT, self.PROJECT_FACT})
+        beta = memzero.search_memories(self.QUERY, project="beta", db_path=self.db_path, llm=self.llm)
+        self.assertEqual({r["fact"] for r in beta}, {self.GLOBAL_FACT})
+
+    def test_project_boost_orders_first(self):
+        import memzero
+        self._seed()
+        alpha = memzero.search_memories(self.QUERY, project="alpha", db_path=self.db_path, llm=self.llm)
+        self.assertEqual(alpha[0]["fact"], self.PROJECT_FACT)
+
+    def test_retrieval_count_increments(self):
+        import memzero
+        self._seed()
+        results = memzero.search_memories(self.QUERY, db_path=self.db_path, llm=self.llm)
+        self.assertTrue(results)
+        conn = db.get_connection(self.resolved_db_path)
+        try:
+            count = conn.execute(
+                "SELECT retrieval_count FROM atomic_memories WHERE id = ?", (results[0]["id"],)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertGreaterEqual(count, 1)
+
+    def test_project_key_for_basename(self):
+        import memzero
+        self.assertEqual(memzero.project_key_for("/tmp/some/dir"), "dir")
+        self.assertIsNone(memzero.project_key_for(None))
+
+
+class TestMemCliHelpers(unittest.TestCase):
+    def setUp(self):
+        self.db_path = "test_memory_cli.db"
+        self.resolved_db_path = db.resolve_db_path(self.db_path)
+        self.mem_index_path = os.path.splitext(self.resolved_db_path)[0] + ".mem.usearch"
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+        db.init_db(self.db_path)
+        self.llm = FakeEmbedLLM({})
+
+    def tearDown(self):
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+    def _add(self, fact, **kwargs):
+        import memzero
+
+        class NoEmbed:
+            provider = "none"
+            chat_model = "none"
+        return memzero.add_memory(fact, db_path=self.db_path, llm=NoEmbed(), **kwargs)
+
+    def test_list_memories_filters(self):
+        import memzero
+        self._add("Alpha uses pnpm", project="alpha", category="fact")
+        self._add("User prefers tabs", project="beta", category="preference")
+        self._add("Global lesson about retries", category="lesson")
+
+        alpha = memzero.list_memories(project="alpha", db_path=self.db_path)
+        self.assertEqual([r["fact"] for r in alpha], ["Alpha uses pnpm"])
+        prefs = memzero.list_memories(category="preference", db_path=self.db_path)
+        self.assertEqual([r["fact"] for r in prefs], ["User prefers tabs"])
+        everything = memzero.list_memories(db_path=self.db_path)
+        self.assertEqual(len(everything), 3)
+
+    def test_prune_stale_removes_unretrieved_old(self):
+        import memzero
+        old = self._add("Stale never-retrieved fact")
+        kept = self._add("Recently retrieved fact")
+        conn = db.get_connection(self.resolved_db_path)
+        try:
+            conn.execute(
+                "UPDATE atomic_memories SET retrieval_count = 3 WHERE id = ?", (kept["id"],)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        ids = memzero.prune_stale(weeks=0, db_path=self.db_path)
+        self.assertIn(old["id"], ids)
+        self.assertNotIn(kept["id"], ids)
+        remaining = {r["id"] for r in memzero.list_memories(db_path=self.db_path)}
+        self.assertNotIn(old["id"], remaining)
+        self.assertIn(kept["id"], remaining)
+
+    def test_stats_shape(self):
+        import memzero
+        self._add("A fact", category="fact")
+        s = memzero.stats(db_path=self.db_path)
+        for key in ("total", "by_category", "never_retrieved"):
+            self.assertIn(key, s)
+        self.assertEqual(s["total"], 1)
+
+
+class TestLedger(unittest.TestCase):
+    def test_ledger_append_and_summary(self):
+        import sys as _sys
+        import tempfile
+        import memzero
+        hooks_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks")
+        _sys.path.insert(0, hooks_dir)
+        try:
+            import _hook_common as hc
+        finally:
+            _sys.path.remove(hooks_dir)
+
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        try:
+            hc.append_ledger("session_start", "s1", 3, 400, path=path)
+            hc.append_ledger("prompt_submit", "s1", 2, 600, path=path)
+            summary = memzero.ledger_summary(path=path)
+            self.assertEqual(summary["total_injections"], 2)
+            self.assertEqual(summary["total_facts"], 5)
+            self.assertEqual(summary["tokens_injected"], (400 + 600) // 4)
+        finally:
+            os.unlink(path)
+
+
+class TestSuperseding(unittest.TestCase):
+    OLD_FACT = "Node 20 is required for the deploy pipeline"
+    NEW_FACT = "Node 22 is required for the deploy pipeline"
+    DUP_FACT = "Node twenty is needed by the deploy pipeline"
+    QUERY = "which node version do deploys need"
+
+    def setUp(self):
+        self.db_path = "test_memory_supersede.db"
+        self.resolved_db_path = db.resolve_db_path(self.db_path)
+        self.mem_index_path = os.path.splitext(self.resolved_db_path)[0] + ".mem.usearch"
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+        db.init_db(self.db_path)
+        # cos(OLD, NEW) = 0.9 — inside the supersede band [0.80, 0.95).
+        # cos(OLD, DUP) = 0.96 — above DUP_SIMILARITY, treated as duplicate.
+        self.llm = FakeEmbedLLM({
+            self.OLD_FACT: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.NEW_FACT: [0.9, 0.43589, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.DUP_FACT: [0.96, 0.28, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            self.QUERY: [0.95, 0.31225, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        })
+
+    def tearDown(self):
+        for p in (self.resolved_db_path, self.mem_index_path):
+            if os.path.exists(p):
+                os.remove(p)
+
+    def test_supersede_marks_old_fact(self):
+        import memzero
+        old = memzero.add_memory(self.OLD_FACT, db_path=self.db_path, llm=self.llm)
+        new = memzero.add_memory(self.NEW_FACT, db_path=self.db_path, llm=self.llm)
+        self.assertEqual(new["superseded"], old["id"])
+
+        conn = db.get_connection(self.resolved_db_path)
+        try:
+            superseded_by = conn.execute(
+                "SELECT superseded_by FROM atomic_memories WHERE id = ?", (old["id"],)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(superseded_by, new["id"])
+
+        results = memzero.search_memories(self.QUERY, db_path=self.db_path, llm=self.llm)
+        facts = {r["fact"] for r in results}
+        self.assertIn(self.NEW_FACT, facts)
+        self.assertNotIn(self.OLD_FACT, facts)
+
+    def test_near_duplicate_above_095_is_skipped_not_superseded(self):
+        import memzero
+        old = memzero.add_memory(self.OLD_FACT, db_path=self.db_path, llm=self.llm)
+        dup = memzero.add_memory(self.DUP_FACT, db_path=self.db_path, llm=self.llm)
+        self.assertEqual(dup["duplicate_of"], old["id"])
+
+        conn = db.get_connection(self.resolved_db_path)
+        try:
+            total = conn.execute("SELECT COUNT(*) FROM atomic_memories").fetchone()[0]
+            superseded_by = conn.execute(
+                "SELECT superseded_by FROM atomic_memories WHERE id = ?", (old["id"],)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(total, 1)
+        self.assertIsNone(superseded_by)
+
+
 if __name__ == "__main__":
     unittest.main()

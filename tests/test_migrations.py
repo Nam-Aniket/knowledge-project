@@ -28,6 +28,20 @@ class TestMigrations(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_v3_columns_present_on_fresh_db(self):
+        db.init_db(self.db_path)
+        conn = db.get_connection(self.resolved_db_path)
+        try:
+            cols = lambda t: [r[1] for r in conn.execute(f"PRAGMA table_info({t})")]
+            self.assertIn("project", cols("atomic_memories"))
+            self.assertIn("retrieval_count", cols("atomic_memories"))
+            self.assertIn("last_retrieved_at", cols("atomic_memories"))
+            self.assertIn("plan_id", cols("goals"))
+            self.assertIn("plan_id", cols("experiments"))
+            self.assertEqual(db.get_metadata(conn, "schema_version"), "3")
+        finally:
+            conn.close()
+
     def test_pending_migration_runs_once_and_advances_version(self):
         # Start from a fresh, stamped DB at the current SCHEMA_VERSION.
         db.init_db(self.db_path)

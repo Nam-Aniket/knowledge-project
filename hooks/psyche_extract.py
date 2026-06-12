@@ -1,15 +1,55 @@
 """PreCompact/SessionEnd hook: extract durable atomic facts from the transcript.
 
-Write-only — injects nothing. No-ops when Psyche has no chat model configured
-(CHAT_MODEL=none); the near-duplicate guard makes PreCompact + SessionEnd
-double-firing safe.
+Write-only — injects nothing. Uses Psyche's chat model when configured; when
+CHAT_MODEL=none, falls back to headless `claude -p --model haiku` (requires a
+one-time `claude /login`). No-ops silently when neither is available. The
+near-duplicate guard makes PreCompact + SessionEnd double-firing safe.
 """
 import json
 import os
+import shutil
+import subprocess
 import sys
 import _hook_common as hc
 
 MAX_TRANSCRIPT_CHARS = 12000
+
+
+class _ClaudeCLIChat:
+    """LLM shim: embeddings delegate to Psyche's local model; completions go
+    through the claude CLI in headless mode on the user's subscription."""
+    chat_model = "claude-haiku-cli"
+
+    def __init__(self, base_llm, cli_path):
+        self._base = base_llm
+        self._cli = cli_path
+        self.provider = base_llm.provider
+
+    def get_embedding(self, text):
+        return self._base.get_embedding(text)
+
+    def generate_completion(self, system_instruction, prompt):
+        env = dict(os.environ, PSYCHE_MEM_HOOK="1")
+        result = subprocess.run(
+            [self._cli, "-p", "--model", "haiku", "--max-turns", "1"],
+            input=f"{system_instruction}\n\n---\nTRANSCRIPT:\n{prompt}",
+            capture_output=True, text=True, timeout=100, env=env, cwd="/tmp",
+        )
+        out = (result.stdout or "").strip()
+        if result.returncode != 0 or not out or "login" in out.lower()[:60]:
+            raise RuntimeError(f"claude CLI extraction failed: {(result.stderr or out)[:200]}")
+        return out
+
+
+def _resolve_llm():
+    from llm_client import LLMClient
+    llm = LLMClient()
+    if getattr(llm, "chat_model", "none") != "none":
+        return llm
+    cli_path = shutil.which("claude") or "/opt/homebrew/bin/claude"
+    if os.path.exists(cli_path):
+        return _ClaudeCLIChat(llm, cli_path)
+    return llm
 
 
 def transcript_text(path: str) -> str:
@@ -46,11 +86,15 @@ def main():
         return
     import memzero
     text = transcript_text(path)
-    stored = memzero.extract_and_store(text, agent_id="claude-code", run_id=session_id)
-    hc.log(f"extract {session_id} ({payload.get('hook_event_name')}): stored {len(stored)} facts")
+    llm = _resolve_llm()
+    project = memzero.project_key_for(hc.cwd_from_payload(payload))
+    stored = memzero.extract_and_store(text, agent_id="claude-code", run_id=session_id,
+                                       project=project, llm=llm)
+    hc.log(f"extract {session_id} ({payload.get('hook_event_name')}) via {getattr(llm, 'chat_model', '?')}: stored {len(stored)} facts")
 
 
 if __name__ == "__main__":
+    hc.recursion_guard()
     try:
         main()
     except Exception as e:

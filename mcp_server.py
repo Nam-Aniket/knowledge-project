@@ -274,7 +274,7 @@ def main():
                     },
                     "serverInfo": {
                         "name": "psyche-mcp",
-                        "version": "0.2.0"
+                        "version": "0.6.0"
                     }
                 }
             elif method == "notifications/initialized":
@@ -486,6 +486,11 @@ def main():
                                         "type": "string",
                                         "description": "Optional domain (e.g. 'wealth', 'health', 'business'). Auto-detected if omitted."
                                     },
+                                    "apply": {
+                                        "type": "boolean",
+                                        "description": "If true, create goal+experiment records from the plan.",
+                                        "default": False
+                                    },
                                     "topic": {
                                         "type": "string",
                                         "description": "Optional topic/profile database name."
@@ -512,6 +517,28 @@ def main():
                             }
                         },
                         {
+                            "name": "checkin_plan",
+                            "description": "Follow through on an active plan: assess progress on a goal's open experiments from the user's update, log reviews, complete experiments, and remember key decisions.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "goal_id": {
+                                        "type": "integer",
+                                        "description": "The goal id to check in on"
+                                    },
+                                    "update": {
+                                        "type": "string",
+                                        "description": "What happened since last time"
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["goal_id", "update"]
+                            }
+                        },
+                        {
                             "name": "add_memory",
                             "description": "Store a durable atomic fact (user preference, decision, lesson, or stable project fact) in cross-agent memory. Near-duplicates are skipped automatically.",
                             "inputSchema": {
@@ -533,6 +560,10 @@ def main():
                                     "agent_id": {
                                         "type": "string",
                                         "description": "Optional originating agent (e.g. 'claude-desktop', 'codex')"
+                                    },
+                                    "project": {
+                                        "type": "string",
+                                        "description": "Optional project key scoping this fact (omit for a global fact)"
                                     },
                                     "topic": {
                                         "type": "string",
@@ -556,6 +587,10 @@ def main():
                                         "type": "integer",
                                         "description": "Max facts to return (default 8)",
                                         "default": 8
+                                    },
+                                    "project": {
+                                        "type": "string",
+                                        "description": "Optional project key: returns that project's facts plus globals, project facts boosted"
                                     },
                                     "topic": {
                                         "type": "string",
@@ -716,7 +751,7 @@ def main():
                         domain = arguments.get("domain")
                         topic = arguments.get("topic")
                         from guidance import generate_guidance_tool
-                        text_result = generate_guidance_tool(goal_text, domain, topic)
+                        text_result = generate_guidance_tool(goal_text, domain, topic, apply=arguments.get("apply", False))
                         resp["result"] = {
                             "content": [
                                 {
@@ -738,6 +773,12 @@ def main():
                                 }
                             ]
                         }
+                    elif tool_name == "checkin_plan":
+                        from guidance import checkin_tool
+                        text_result = checkin_tool(
+                            arguments.get("goal_id"), arguments.get("update"), arguments.get("topic")
+                        )
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
                     elif tool_name == "add_memory":
                         import memzero
                         db_path = resolve_topic_db_path(arguments.get("topic"))
@@ -746,6 +787,7 @@ def main():
                             category=arguments.get("category"),
                             entities=arguments.get("entities"),
                             agent_id=arguments.get("agent_id"),
+                            project=arguments.get("project"),
                             db_path=db_path,
                         )
                         if result["duplicate_of"] is not None:
@@ -759,6 +801,7 @@ def main():
                         results = memzero.search_memories(
                             arguments.get("query"),
                             top=int(arguments.get("top", 8) or 8),
+                            project=arguments.get("project"),
                             db_path=db_path,
                         )
                         if results:

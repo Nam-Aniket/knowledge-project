@@ -2,6 +2,14 @@
 
 All notable changes to the **Psyche** project will be documented in this file.
 
+## [0.6.0] - 2026-06-12
+
+### Added
+- **Guidance Redesign**: Actionable guidance plans via strict JSON parsing with retry, materialization to goals and experiments records, a check-in follow-through loop, graceful degradation for no-chat models, and atomic-memory context injection.
+- **Memory Productization**: `psyche connect` for one-command onboarding (Claude Code, Codex, Gemini/Antigravity), project-scoped facts with cwd-derived keys and boosted retrieval, `psyche mem` CLI (list, search, add, delete, prune, stats), token-savings ledger, and contradiction superseding (similarity in [0.80,0.95)) with retrieval-count ranking tiebreak.
+
+---
+
 ## [0.5.0] - 2026-06-08
 
 ### Added

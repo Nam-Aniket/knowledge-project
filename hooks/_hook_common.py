@@ -14,6 +14,13 @@ os.environ.setdefault("PSYCHE_NONINTERACTIVE", "1")
 LOG_PATH = os.path.expanduser("~/.psyche/memzero_hook.log")
 
 
+def recursion_guard():
+    """Exits immediately when running inside a headless claude spawned by a
+    hook (PSYCHE_MEM_HOOK=1), so extraction can't trigger hooks recursively."""
+    if os.environ.get("PSYCHE_MEM_HOOK") == "1":
+        sys.exit(0)
+
+
 def log(msg: str):
     try:
         with open(LOG_PATH, "a") as f:
@@ -27,6 +34,30 @@ def read_payload() -> dict:
         return json.load(sys.stdin)
     except Exception:
         return {}
+
+
+def cwd_from_payload(payload) -> str | None:
+    return payload.get("cwd") or payload.get("workspace") or None
+
+
+MEM_LEDGER_PATH = os.path.expanduser("~/.psyche/mem_ledger.jsonl")
+
+
+def append_ledger(event: str, session_id: str, count: int, chars: int, path: str = None):
+    """Appends one JSON line: {ts, event, session_id, count, chars}.
+    Swallows all errors (hooks must never break)."""
+    from datetime import datetime, timezone
+    try:
+        with open(path or MEM_LEDGER_PATH, "a") as f:
+            f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": event,
+                "session_id": session_id,
+                "count": count,
+                "chars": chars,
+            }) + "\n")
+    except Exception:
+        pass
 
 
 def ledger_path(session_id: str) -> str:

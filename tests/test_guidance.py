@@ -13,6 +13,37 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import db
 import guidance
 
+
+def _valid_plan_json(goal, domain):
+    """A schema-conformant action plan used by the generation tests."""
+    return {
+        "domain": domain,
+        "goal": goal,
+        "diagnosis": "Grounded read of the situation.",
+        "actions": [
+            {
+                "action": "A/B test two subject lines on 50 emails",
+                "horizon": "this_week",
+                "time_estimate_min": 45,
+                "success_criterion": "Both variants sent to 25 recipients each",
+                "due_offset_days": 3,
+                "metric": {"name": "reply_rate", "type": "objective", "unit": "%"},
+            },
+            {
+                "action": "Rewrite the first line of the template with personalization",
+                "horizon": "today",
+                "time_estimate_min": 20,
+                "success_criterion": "New template saved and used for next batch",
+                "due_offset_days": 1,
+            },
+        ],
+        "first_action_index": 1,
+        "relevant_principles": [{"principle": "Personalization is key", "source": "The Cold Email Manifesto, Ch. 4"}],
+        "rule_suggestions": ["Keep emails short"],
+        "review_in_days": 7,
+    }
+
+
 class TestGuidanceLayer(unittest.TestCase):
     def setUp(self):
         # Create a temp file for database
@@ -179,21 +210,7 @@ class TestGuidanceLayer(unittest.TestCase):
         mock_llm.provider = "mock"
         mock_llm.chat_model = "mock-model"
         
-        brief_json = {
-            "domain": "business",
-            "stage": "planning",
-            "goal": "Improve outreach reply rate",
-            "missing_information": ["List quality details"],
-            "relevant_principles": [{"principle": "Personalization is key", "source": "The Cold Email Manifesto"}],
-            "key_assumptions": ["List is valid"],
-            "risks_and_traps": ["Spam filters"],
-            "suggested_metrics": [{"name": "reply_rate", "type": "objective", "unit": "%"}],
-            "next_action": "A/B test subject lines",
-            "success_condition": "Reply rate > 10%",
-            "failure_condition": "Spam rate > 2%",
-            "review_date": "2026-06-22",
-            "rule_suggestions": ["Keep emails short"]
-        }
+        brief_json = _valid_plan_json("Improve outreach reply rate", "business")
         mock_llm.generate_completion.return_value = json.dumps(brief_json)
 
         brief = guidance.generate_guidance_brief(
@@ -205,38 +222,138 @@ class TestGuidanceLayer(unittest.TestCase):
 
         self.assertEqual(brief["domain"], "business")
         self.assertEqual(brief["goal"], "Improve outreach reply rate")
-        self.assertEqual(brief["next_action"], "A/B test subject lines")
+        self.assertTrue(brief["actions"])
         self.assertEqual(brief["rule_suggestions"], ["Keep emails short"])
         mock_hybrid_search.assert_called_once()
         mock_retrieve_concept.assert_called_once()
 
-    @mock.patch('guidance.LLMClient')
-    def test_generate_guidance_fallback_parsing(self, mock_llm_class):
-        """Test fallback parser if LLM outputs poorly formatted JSON."""
+    @mock.patch('query.perform_hybrid_search')
+    @mock.patch('query.retrieve_concept_context')
+    def test_brief_retry_on_bad_json(self, mock_retrieve_concept, mock_hybrid_search):
+        """Garbage first response triggers exactly one retry, which succeeds."""
+        mock_hybrid_search.return_value = []
+        mock_retrieve_concept.return_value = ""
         mock_llm = mock.Mock()
         mock_llm.provider = "mock"
         mock_llm.chat_model = "mock-model"
-        
-        # Simulate LLM returning conversational text wrapped around a fake schema
-        bad_response = '''
-        Sure! Here is your guidance:
-        Next Action: Build a prototype
-        Success Condition: It works
-        Review Date: 2026-06-20
-        '''
-        mock_llm.generate_completion.return_value = bad_response
-        
-        brief = guidance.generate_guidance_brief(
-            goal_text="Test idea",
-            domain="ideation",
-            db_path=self.db_path,
-            llm=mock_llm
-        )
-        self.assertEqual(brief["domain"], "ideation")
-        self.assertEqual(brief["next_action"], "Build a prototype")
-        self.assertEqual(brief["success_condition"], "It works")
-        self.assertEqual(brief["review_date"], "2026-06-20")
-        self.assertIn("Could not strictly parse", brief["parse_error"])
+        mock_llm.generate_completion.side_effect = [
+            "Sure! Here is some prose, not JSON.",
+            json.dumps(_valid_plan_json("Test goal", "general")),
+        ]
+
+        brief = guidance.generate_guidance_brief("Test goal", "general", self.db_path, mock_llm)
+        self.assertTrue(brief["actions"])
+        self.assertEqual(mock_llm.generate_completion.call_count, 2)
+        self.assertNotIn("parse_error", brief)
+        self.assertNotIn("raw_response", brief)
+
+    @mock.patch('query.perform_hybrid_search')
+    @mock.patch('query.retrieve_concept_context')
+    def test_brief_validates_actions(self, mock_retrieve_concept, mock_hybrid_search):
+        """Every returned action conforms to the plan schema."""
+        from plan_schema import VALID_HORIZONS
+        mock_hybrid_search.return_value = []
+        mock_retrieve_concept.return_value = ""
+        mock_llm = mock.Mock()
+        mock_llm.provider = "mock"
+        mock_llm.chat_model = "mock-model"
+        mock_llm.generate_completion.return_value = json.dumps(_valid_plan_json("Test goal", "general"))
+
+        brief = guidance.generate_guidance_brief("Test goal", "general", self.db_path, mock_llm)
+        self.assertTrue(brief["actions"])
+        for action in brief["actions"]:
+            self.assertIn(action["horizon"], VALID_HORIZONS)
+            self.assertIsInstance(action["due_offset_days"], int)
+
+    def test_materialize_creates_records(self):
+        """materialize_plan persists one goal + one experiment per action under a shared plan_id."""
+        plan = _valid_plan_json("Improve outreach reply rate", "business")
+        plan["actions"].append({
+            "action": "Clean the prospect list of bounced addresses",
+            "horizon": "this_month",
+            "time_estimate_min": 60,
+            "success_criterion": "Bounce rate below 1%",
+            "due_offset_days": 14,
+        })
+        result = guidance.materialize_plan(plan, self.db_path)
+
+        goals = self.conn.execute(
+            "SELECT id, plan_id FROM goals WHERE plan_id = ?", (result["plan_id"],)
+        ).fetchall()
+        self.assertEqual(len(goals), 1)
+
+        experiments = self.conn.execute(
+            "SELECT title, success_condition, metric_name, review_date FROM experiments WHERE plan_id = ?",
+            (result["plan_id"],),
+        ).fetchall()
+        self.assertEqual(len(experiments), 3)
+        by_title = {e[0]: e for e in experiments}
+        first = by_title["A/B test two subject lines on 50 emails"]
+        self.assertEqual(first[1], "Both variants sent to 25 recipients each")
+        self.assertEqual(first[2], "reply_rate")
+        for e in experiments:
+            datetime.strptime(e[3], "%Y-%m-%d")
+
+    def test_checkin_no_chat_logs_review(self):
+        """No chat model: the update is logged as one review, no LLM call."""
+        goal_id = db.add_goal(self.conn, domain="wealth", title="Save $2k")
+        db.add_experiment(self.conn, goal_id=goal_id, title="Cancel 2 subscriptions",
+                          success_condition="2 cancelled")
+
+        mock_llm = mock.Mock()
+        mock_llm.provider = "none"
+        mock_llm.chat_model = "none"
+        mock_llm.generate_completion.side_effect = AssertionError("must not be called")
+
+        result = guidance.checkin_plan(goal_id, "I cancelled one sub", self.db_path, mock_llm)
+        mock_llm.generate_completion.assert_not_called()
+        self.assertEqual(len(result["reviews"]), 1)
+        reviews = db.get_reviews(self.conn, goal_id=goal_id)
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0]["what_happened"], "I cancelled one sub")
+
+    def test_checkin_chat_completes_and_stores_decision(self):
+        """Chat path: experiment completed, review written, decision stored as atomic fact."""
+        goal_id = db.add_goal(self.conn, domain="wealth", title="Save $2k")
+        exp_id = db.add_experiment(self.conn, goal_id=goal_id, title="Cancel 2 subscriptions",
+                                   success_condition="2 cancelled")
+
+        mock_llm = mock.Mock()
+        mock_llm.provider = "mock"
+        mock_llm.chat_model = "mock-model"
+        mock_llm.get_embedding.return_value = [0.1] * 8
+        mock_llm.generate_completion.return_value = json.dumps({
+            "summary": "Both subscriptions cancelled. Goal on track.",
+            "experiment_updates": [
+                {"experiment_id": exp_id, "decision": "complete", "reason": "Both subs cancelled"}
+            ],
+            "key_decisions": ["User cancels unused subscriptions quarterly to control spending"],
+        })
+
+        result = guidance.checkin_plan(goal_id, "Cancelled both subscriptions today", self.db_path, mock_llm)
+        self.assertIn(exp_id, result["completed"])
+        self.assertEqual(len(result["reviews"]), 1)
+        self.assertEqual(len(result["facts_stored"]), 1)
+
+        exp = db.get_experiments(self.conn, goal_id=goal_id, status="completed")
+        self.assertEqual(len(exp), 1)
+        fact_row = self.conn.execute(
+            "SELECT category, fact FROM atomic_memories WHERE id = ?", (result["facts_stored"][0],)
+        ).fetchone()
+        self.assertEqual(fact_row[0], "decision")
+        self.assertIn("subscriptions", fact_row[1])
+
+    def test_retrieval_only_when_no_chat(self):
+        """No chat model: retrieval-only brief, generate_completion never called."""
+        mock_llm = mock.Mock()
+        mock_llm.provider = "none"
+        mock_llm.chat_model = "none"
+        mock_llm.generate_completion.side_effect = AssertionError("must not be called")
+
+        brief = guidance.generate_guidance_brief("Test goal", "general", self.db_path, mock_llm)
+        self.assertIsInstance(brief, dict)
+        self.assertEqual(brief["actions"], [])
+        mock_llm.generate_completion.assert_not_called()
 
     @mock.patch('guidance.LLMClient')
     @mock.patch('guidance.generate_guidance_brief')

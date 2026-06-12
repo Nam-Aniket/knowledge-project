@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 
 import numpy as np
@@ -19,6 +20,9 @@ from db import resolve_db_path, get_connection, init_db
 
 # Skip storing a fact whose cosine similarity to an existing live fact exceeds this.
 DUP_SIMILARITY = 0.95
+# A new fact in [SUPERSEDE_LOW, DUP_SIMILARITY) to an existing live fact marks
+# the old one superseded — write-time contradiction resolution, no LLM needed.
+SUPERSEDE_LOW = 0.80
 # Semantic matches below this similarity are discarded — weak matches waste
 # injected tokens. bge-small scores unrelated text ~0.4-0.5, related ~0.6+.
 DEFAULT_MIN_SCORE = float(os.getenv("PSYCHE_MEM_MIN_SCORE", "0.55"))
@@ -110,6 +114,23 @@ def _remove_from_mem_index(db_path: str, memory_ids: list[int]):
         pass
 
 
+def project_key_for(cwd: str | None) -> str | None:
+    """Returns a stable project key for cwd: the git toplevel basename if cwd
+    is in a git repo, else the cwd basename. None when cwd is falsy."""
+    if not cwd:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return os.path.basename(result.stdout.strip())
+    except Exception:
+        pass
+    return os.path.basename(os.path.abspath(cwd))
+
+
 def _get_llm(llm=None):
     if llm is not None:
         return llm
@@ -160,10 +181,41 @@ def _find_duplicate(db_path: str, vector) -> int | None:
         return None
 
 
+def _find_supersede_candidate(db_path: str, vector) -> tuple[int, float] | None:
+    """Returns (id, similarity) of the top live fact whose similarity to vector
+    is in [SUPERSEDE_LOW, DUP_SIMILARITY), else None."""
+    if vector is None:
+        return None
+    index = _load_mem_index(db_path)
+    if index is None or len(index) == 0:
+        return None
+    try:
+        matches = index.search(np.array(vector, dtype=np.float32), 1)
+        if len(matches) == 0:
+            return None
+        key = int(matches[0].key)
+        similarity = 1.0 - float(matches[0].distance)
+        if not (SUPERSEDE_LOW <= similarity < DUP_SIMILARITY):
+            return None
+        conn = get_connection(db_path)
+        try:
+            row = conn.execute(
+                "SELECT id FROM atomic_memories WHERE id = ? AND superseded_by IS NULL",
+                (key,),
+            ).fetchone()
+            return (row[0], similarity) if row else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
 def add_memory(fact: str, category: str = None, entities: list[str] = None,
-               agent_id: str = None, run_id: str = None,
+               agent_id: str = None, run_id: str = None, project: str = None,
                db_path: str = None, llm=None) -> dict:
-    """Stores a single atomic fact verbatim. Returns {id, fact, duplicate_of}."""
+    """Stores a single atomic fact verbatim. project=None means a global fact.
+    A near (not duplicate) match in [0.80, 0.95) marks the old fact superseded.
+    Returns {id, fact, duplicate_of, superseded}."""
     fact = (fact or "").strip()
     if not fact:
         raise ValueError("fact must be a non-empty string")
@@ -175,7 +227,9 @@ def add_memory(fact: str, category: str = None, entities: list[str] = None,
 
     dup_id = _find_duplicate(resolved, vector)
     if dup_id is not None:
-        return {"id": dup_id, "fact": fact, "duplicate_of": dup_id}
+        return {"id": dup_id, "fact": fact, "duplicate_of": dup_id, "superseded": None}
+
+    supersede = _find_supersede_candidate(resolved, vector)
 
     now = _now()
     blob = np.array(vector, dtype=np.float32).tobytes() if vector is not None else None
@@ -183,9 +237,9 @@ def add_memory(fact: str, category: str = None, entities: list[str] = None,
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO atomic_memories (fact, agent_id, run_id, category, embedding_blob, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (fact, agent_id, run_id, category, blob, now, now),
+            "INSERT INTO atomic_memories (fact, agent_id, run_id, category, project, embedding_blob, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (fact, agent_id, run_id, category, project, blob, now, now),
         )
         memory_id = cursor.lastrowid
         cursor.execute(
@@ -197,16 +251,25 @@ def add_memory(fact: str, category: str = None, entities: list[str] = None,
                 "INSERT OR IGNORE INTO memory_entities (memory_id, entity) VALUES (?, ?)",
                 (memory_id, entity),
             )
+        superseded_id = None
+        if supersede is not None:
+            cursor.execute(
+                "UPDATE atomic_memories SET superseded_by = ?, updated_at = ? "
+                "WHERE id = ? AND superseded_by IS NULL",
+                (memory_id, now, supersede[0]),
+            )
+            if cursor.rowcount:
+                superseded_id = supersede[0]
         conn.commit()
     finally:
         conn.close()
     if vector is not None:
         _add_to_mem_index(resolved, memory_id, vector)
-    return {"id": memory_id, "fact": fact, "duplicate_of": None}
+    return {"id": memory_id, "fact": fact, "duplicate_of": None, "superseded": superseded_id}
 
 
 def extract_and_store(transcript_text: str, agent_id: str = None, run_id: str = None,
-                      db_path: str = None, llm=None) -> list[dict]:
+                      project: str = None, db_path: str = None, llm=None) -> list[dict]:
     """LLM-extracts atomic facts from a transcript and stores them.
 
     Returns the list of stored facts. Returns [] without storing when no chat
@@ -238,6 +301,7 @@ def extract_and_store(transcript_text: str, agent_id: str = None, run_id: str = 
             entities=item.get("entities") if isinstance(item.get("entities"), list) else None,
             agent_id=agent_id,
             run_id=run_id,
+            project=project,
             db_path=db_path,
             llm=llm,
         )
@@ -261,9 +325,11 @@ def _fts_tokens(query: str) -> list[str]:
 
 def search_memories(query: str, agent_id: str = None, top: int = 8,
                     db_path: str = None, llm=None,
-                    min_score: float = DEFAULT_MIN_SCORE) -> list[dict]:
+                    min_score: float = DEFAULT_MIN_SCORE,
+                    project: str = None) -> list[dict]:
     """Hybrid search over live atomic facts. Returns [] on weak matches so
-    callers don't inject noise."""
+    callers don't inject noise. When project is given, returns that project's
+    facts plus global facts (project IS NULL), with project facts boosted."""
     resolved = resolve_db_path(db_path)
     if not os.path.exists(resolved):
         return []
@@ -335,30 +401,56 @@ def search_memories(query: str, agent_id: str = None, top: int = 8,
 
         placeholders = ",".join("?" for _ in ranked_ids)
         sql = (
-            f"SELECT id, fact, category, agent_id, updated_at FROM atomic_memories "
-            f"WHERE id IN ({placeholders}) AND superseded_by IS NULL"
+            f"SELECT id, fact, category, agent_id, updated_at, project, retrieval_count "
+            f"FROM atomic_memories WHERE id IN ({placeholders}) AND superseded_by IS NULL"
         )
         params = list(ranked_ids)
         if agent_id:
             sql += " AND agent_id = ?"
             params.append(agent_id)
+        if project:
+            sql += " AND (project = ? OR project IS NULL)"
+            params.append(project)
         rows = {r[0]: r for r in conn.execute(sql, params).fetchall()}
+
+        # Stable boost: same-project facts rank above globals at equal score.
+        if project:
+            for mid, row in rows.items():
+                if row[5] == project:
+                    scores[mid] = scores.get(mid, 0.0) + 0.01
+        # Tiebreaks: higher retrieval_count, then more recent updated_at.
+        by_recency = sorted(rows, key=lambda mid: rows[mid][4] or "", reverse=True)
+        ranked_ids = sorted(
+            by_recency,
+            key=lambda mid: (-scores.get(mid, 0.0), -(rows[mid][6] or 0)),
+        )
+
+        sim_by_id = dict(semantic)
+        results = []
+        for mid in ranked_ids:
+            if mid not in rows:
+                continue
+            _id, fact, category, agent, updated_at, row_project, retrieval_count = rows[mid]
+            results.append({
+                "id": _id, "fact": fact, "category": category,
+                "agent_id": agent, "updated_at": updated_at,
+                "project": row_project,
+                "similarity": round(sim_by_id.get(mid, 0.0), 3),
+            })
+            if len(results) >= top:
+                break
+
+        if results:
+            id_placeholders = ",".join("?" for _ in results)
+            conn.execute(
+                f"UPDATE atomic_memories SET retrieval_count = retrieval_count + 1, "
+                f"last_retrieved_at = ? WHERE id IN ({id_placeholders})",
+                [_now()] + [r["id"] for r in results],
+            )
+            conn.commit()
     finally:
         conn.close()
 
-    sim_by_id = dict(semantic)
-    results = []
-    for mid in ranked_ids:
-        if mid not in rows:
-            continue
-        _id, fact, category, agent, updated_at = rows[mid]
-        results.append({
-            "id": _id, "fact": fact, "category": category,
-            "agent_id": agent, "updated_at": updated_at,
-            "similarity": round(sim_by_id.get(mid, 0.0), 3),
-        })
-        if len(results) >= top:
-            break
     return results
 
 
@@ -459,24 +551,155 @@ def list_entities(db_path: str = None) -> list[dict]:
     return [{"entity": r[0], "count": r[1]} for r in rows]
 
 
-def standing_fact_rows(top: int = 12, db_path: str = None) -> list[dict]:
-    """Recent durable preference/decision/lesson facts for session-start injection."""
+def list_memories(limit: int = 50, project: str = None, category: str = None,
+                  include_superseded: bool = False, db_path: str = None) -> list[dict]:
+    """Lists facts (live by default), newest first."""
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return []
+    conn = get_connection(resolved)
+    try:
+        sql = ("SELECT id, fact, category, project, retrieval_count, updated_at, superseded_by "
+               "FROM atomic_memories WHERE 1=1 ")
+        params = []
+        if not include_superseded:
+            sql += "AND superseded_by IS NULL "
+        if project:
+            sql += "AND project = ? "
+            params.append(project)
+        if category:
+            sql += "AND category = ? "
+            params.append(category)
+        sql += "ORDER BY updated_at DESC LIMIT ?"
+        params.append(limit)
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    finally:
+        conn.close()
+    return [{"id": r[0], "fact": r[1], "category": r[2], "project": r[3],
+             "retrieval_count": r[4], "updated_at": r[5], "superseded_by": r[6]}
+            for r in rows]
+
+
+def prune_stale(weeks: int = 8, dry_run: bool = False, db_path: str = None) -> list[int]:
+    """Deletes (or, dry_run, lists) live facts never retrieved and not updated
+    in the last `weeks` weeks. Returns the affected ids."""
+    from datetime import timedelta
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(weeks=weeks)).isoformat()
+    conn = get_connection(resolved)
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT id FROM atomic_memories WHERE superseded_by IS NULL "
+                "AND retrieval_count = 0 AND updated_at < ?", (cutoff,)
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        ids = [r[0] for r in rows]
+        if not dry_run and ids:
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(f"DELETE FROM atomic_memories WHERE id IN ({placeholders})", ids)
+            conn.execute(f"DELETE FROM atomic_memories_fts WHERE memory_id IN ({placeholders})", ids)
+            conn.commit()
+    finally:
+        conn.close()
+    if not dry_run and ids:
+        _remove_from_mem_index(resolved, ids)
+    return ids
+
+
+def stats(db_path: str = None) -> dict:
+    """Returns {total, by_category, by_project, total_retrievals, never_retrieved}."""
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return {"total": 0, "by_category": {}, "by_project": {}, "total_retrievals": 0, "never_retrieved": 0}
+    conn = get_connection(resolved)
+    try:
+        try:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM atomic_memories WHERE superseded_by IS NULL").fetchone()[0]
+            by_category = dict(conn.execute(
+                "SELECT COALESCE(category,'(none)'), COUNT(*) FROM atomic_memories "
+                "WHERE superseded_by IS NULL GROUP BY category").fetchall())
+            by_project = dict(conn.execute(
+                "SELECT COALESCE(project,'(global)'), COUNT(*) FROM atomic_memories "
+                "WHERE superseded_by IS NULL GROUP BY project ORDER BY COUNT(*) DESC LIMIT 5").fetchall())
+            total_retrievals = conn.execute(
+                "SELECT COALESCE(SUM(retrieval_count),0) FROM atomic_memories").fetchone()[0]
+            never_retrieved = conn.execute(
+                "SELECT COUNT(*) FROM atomic_memories WHERE superseded_by IS NULL "
+                "AND retrieval_count = 0").fetchone()[0]
+        except sqlite3.OperationalError:
+            return {"total": 0, "by_category": {}, "by_project": {}, "total_retrievals": 0, "never_retrieved": 0}
+    finally:
+        conn.close()
+    return {"total": total, "by_category": by_category, "by_project": by_project,
+            "total_retrievals": total_retrievals, "never_retrieved": never_retrieved}
+
+
+MEM_LEDGER_PATH = os.path.expanduser("~/.psyche/mem_ledger.jsonl")
+
+
+def ledger_summary(path: str = None) -> dict:
+    """Summarizes the hook injection ledger: total injections, facts and chars
+    injected, and tokens injected estimated as chars/4 — which equals the
+    re-derivation avoided (an injected fact is one the agent didn't re-derive)."""
+    path = path or MEM_LEDGER_PATH
+    total_injections = total_facts = total_chars = 0
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                total_injections += 1
+                total_facts += int(entry.get("count", 0))
+                total_chars += int(entry.get("chars", 0))
+    except OSError:
+        pass
+    return {
+        "total_injections": total_injections,
+        "total_facts": total_facts,
+        "total_chars": total_chars,
+        "tokens_injected": total_chars // 4,
+    }
+
+
+def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None) -> list[dict]:
+    """Recent durable preference/decision/lesson facts for session-start
+    injection. With a project, returns that project's facts plus globals,
+    project facts first."""
     resolved = resolve_db_path(db_path)
     if not os.path.exists(resolved):
         return []
     conn = get_connection(resolved)
     try:
         try:
-            rows = conn.execute(
-                "SELECT id, fact, category, agent_id, updated_at FROM atomic_memories "
+            sql = (
+                "SELECT id, fact, category, agent_id, updated_at, project FROM atomic_memories "
                 "WHERE superseded_by IS NULL AND category IN ('preference','decision','lesson') "
-                "ORDER BY updated_at DESC LIMIT ?", (top,)
-            ).fetchall()
+            )
+            params = []
+            if project:
+                sql += "AND (project = ? OR project IS NULL) "
+                params.append(project)
+                sql += "ORDER BY (project IS NULL), updated_at DESC LIMIT ?"
+            else:
+                sql += "ORDER BY updated_at DESC LIMIT ?"
+            params.append(top)
+            rows = conn.execute(sql, params).fetchall()
         except sqlite3.OperationalError:
             return []
     finally:
         conn.close()
-    return [{"id": r[0], "fact": r[1], "category": r[2], "agent_id": r[3], "updated_at": r[4]}
+    return [{"id": r[0], "fact": r[1], "category": r[2], "agent_id": r[3],
+             "updated_at": r[4], "project": r[5]}
             for r in rows]
 
 
