@@ -25,6 +25,12 @@ class TestConnect(unittest.TestCase):
         importlib.reload(connect)
         return connect
 
+    def test_protocol_block_includes_synthesis_and_placement(self):
+        connect = self._import_connect()
+        block = connect._get_protocol_block()
+        self.assertIn("submit_guidance_plan", block)
+        self.assertIn("append-only", block)
+
     def test_claude_code_creates_mcp_entry(self):
         connect = self._import_connect()
         actions = connect.connect("claude-code")
