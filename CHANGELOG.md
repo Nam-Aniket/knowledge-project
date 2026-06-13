@@ -12,6 +12,7 @@ All notable changes to the **Psyche** project will be documented in this file.
 - **`psyche mem forget/review/unforget` CLI subcommands** for interactive memory management.
 - **`forget_memory`, `record_outcome`, `unforget` MCP tools** registered on the MCP server for use from any host agent.
 - **Check-in auto-scoring** (`score_experiment_completion`): when `checkin_plan` assesses an experiment, if `success_condition` contains a numeric comparator (`>=`, `<=`, `>`, `<`, `=`) and a matching metric log exists, the experiment is scored deterministically and `record_outcome` is called with `source="checkin"`.
+- **`psyche mem outcomes` subcommand**: observability window for the experiential-learning loop. Shows total outcomes, breakdown by source (transcript/mcp/checkin) and by outcome (good/bad/neutral), sessions classified, top facts by observed win-rate, forget candidates, and retired count. Ranking is NOT yet affected by these counters — capture only.
 - **Schema migration v4** (`SCHEMA_VERSION = 4`): adds `wins`, `losses`, `outcome_count`, `last_outcome_at`, `retired_at` to `atomic_memories`; `wins`, `losses`, `last_outcome_at` to `rules`; new `memory_outcomes` audit table.
 
 ### Notes

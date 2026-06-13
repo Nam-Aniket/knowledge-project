@@ -787,6 +787,166 @@ def ledger_summary(path: str = None, with_transcripts: bool = False,
     return result
 
 
+def outcomes_summary(db_path: str = None) -> dict:
+    """Read-only summary of what the experiential-learning loop has captured.
+
+    Returns:
+      total_outcomes            int
+      by_source                 dict  {transcript, mcp, checkin} -> int
+      by_outcome                dict  {good, bad, neutral} -> int
+      sessions_classified       int   distinct session_ids across all rows
+      sessions_by_outcome       dict  {good, bad, neutral} -> distinct session count
+      top_facts                 list  up to 10 {id, fact, wins, losses, win_rate|None, category}
+                                      ranked by win_rate desc then outcome_count desc
+                                      (outcome_count >= 1 only)
+      worst_facts               list  up to 5  same shape, losses >= 1, ranked win_rate asc
+      retired_count             int
+      retired_sample            list  up to 5  {id, fact, retired_at}
+
+    All aggregations are guarded against zero rows and divide-by-zero.
+    win_rate is None when wins + losses == 0.
+    Never raises.
+    """
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return {
+            "total_outcomes": 0,
+            "by_source": {"transcript": 0, "mcp": 0, "checkin": 0},
+            "by_outcome": {"good": 0, "bad": 0, "neutral": 0},
+            "sessions_classified": 0,
+            "sessions_by_outcome": {"good": 0, "bad": 0, "neutral": 0},
+            "top_facts": [],
+            "worst_facts": [],
+            "retired_count": 0,
+            "retired_sample": [],
+        }
+
+    conn = get_connection(resolved)
+    try:
+        try:
+            # Total outcomes
+            total_outcomes = conn.execute(
+                "SELECT COUNT(*) FROM memory_outcomes"
+            ).fetchone()[0] or 0
+
+            # By source
+            source_rows = conn.execute(
+                "SELECT COALESCE(source,'(other)'), COUNT(*) FROM memory_outcomes GROUP BY source"
+            ).fetchall()
+            by_source = {"transcript": 0, "mcp": 0, "checkin": 0}
+            for src, cnt in source_rows:
+                if src in by_source:
+                    by_source[src] = cnt
+                # silently absorb unknown sources without raising
+
+            # By outcome
+            outcome_rows = conn.execute(
+                "SELECT COALESCE(outcome,'neutral'), COUNT(*) FROM memory_outcomes GROUP BY outcome"
+            ).fetchall()
+            by_outcome = {"good": 0, "bad": 0, "neutral": 0}
+            for out, cnt in outcome_rows:
+                if out in by_outcome:
+                    by_outcome[out] = cnt
+
+            # Sessions classified (distinct session_id, ignoring NULLs)
+            sessions_classified = conn.execute(
+                "SELECT COUNT(DISTINCT session_id) FROM memory_outcomes WHERE session_id IS NOT NULL"
+            ).fetchone()[0] or 0
+
+            # Per-outcome distinct session counts
+            sess_out_rows = conn.execute(
+                "SELECT COALESCE(outcome,'neutral'), COUNT(DISTINCT session_id) "
+                "FROM memory_outcomes WHERE session_id IS NOT NULL GROUP BY outcome"
+            ).fetchall()
+            sessions_by_outcome = {"good": 0, "bad": 0, "neutral": 0}
+            for out, cnt in sess_out_rows:
+                if out in sessions_by_outcome:
+                    sessions_by_outcome[out] = cnt
+
+            # Top facts: outcome_count >= 1, ranked by win_rate desc then outcome_count desc
+            top_rows = conn.execute(
+                "SELECT id, fact, wins, losses, outcome_count, COALESCE(category,'') "
+                "FROM atomic_memories WHERE outcome_count >= 1 AND retired_at IS NULL "
+                "ORDER BY "
+                "  CASE WHEN wins + losses = 0 THEN NULL ELSE CAST(wins AS REAL)/(wins+losses) END DESC NULLS LAST, "
+                "  outcome_count DESC "
+                "LIMIT 10"
+            ).fetchall()
+            top_facts = []
+            for row_id, fact, wins, losses, outcome_count, category in top_rows:
+                win_rate = (wins / (wins + losses)) if (wins + losses) > 0 else None
+                top_facts.append({
+                    "id": row_id,
+                    "fact": fact[:60] + ("…" if len(fact) > 60 else ""),
+                    "wins": wins,
+                    "losses": losses,
+                    "win_rate": win_rate,
+                    "category": category or None,
+                })
+
+            # Worst facts: losses >= 1, ranked win_rate asc
+            worst_rows = conn.execute(
+                "SELECT id, fact, wins, losses, outcome_count, COALESCE(category,'') "
+                "FROM atomic_memories WHERE losses >= 1 AND retired_at IS NULL "
+                "ORDER BY "
+                "  CASE WHEN wins + losses = 0 THEN NULL ELSE CAST(wins AS REAL)/(wins+losses) END ASC NULLS LAST, "
+                "  losses DESC "
+                "LIMIT 5"
+            ).fetchall()
+            worst_facts = []
+            for row_id, fact, wins, losses, outcome_count, category in worst_rows:
+                win_rate = (wins / (wins + losses)) if (wins + losses) > 0 else None
+                worst_facts.append({
+                    "id": row_id,
+                    "fact": fact[:60] + ("…" if len(fact) > 60 else ""),
+                    "wins": wins,
+                    "losses": losses,
+                    "win_rate": win_rate,
+                    "category": category or None,
+                })
+
+            # Retired
+            retired_count = conn.execute(
+                "SELECT COUNT(*) FROM atomic_memories WHERE retired_at IS NOT NULL"
+            ).fetchone()[0] or 0
+
+            retired_rows = conn.execute(
+                "SELECT id, fact, retired_at FROM atomic_memories WHERE retired_at IS NOT NULL "
+                "ORDER BY retired_at DESC LIMIT 5"
+            ).fetchall()
+            retired_sample = [
+                {"id": r[0], "fact": r[1][:60] + ("…" if len(r[1]) > 60 else ""), "retired_at": r[2]}
+                for r in retired_rows
+            ]
+
+        except sqlite3.OperationalError:
+            return {
+                "total_outcomes": 0,
+                "by_source": {"transcript": 0, "mcp": 0, "checkin": 0},
+                "by_outcome": {"good": 0, "bad": 0, "neutral": 0},
+                "sessions_classified": 0,
+                "sessions_by_outcome": {"good": 0, "bad": 0, "neutral": 0},
+                "top_facts": [],
+                "worst_facts": [],
+                "retired_count": 0,
+                "retired_sample": [],
+            }
+    finally:
+        conn.close()
+
+    return {
+        "total_outcomes": total_outcomes,
+        "by_source": by_source,
+        "by_outcome": by_outcome,
+        "sessions_classified": sessions_classified,
+        "sessions_by_outcome": sessions_by_outcome,
+        "top_facts": top_facts,
+        "worst_facts": worst_facts,
+        "retired_count": retired_count,
+        "retired_sample": retired_sample,
+    }
+
+
 def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None,
                        stable: bool = False) -> list[dict]:
     """Durable preference/decision/lesson facts for session-start injection.

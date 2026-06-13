@@ -542,7 +542,222 @@ class TestRankingUnaffectedByOutcomes(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 6. score_experiment_completion
+# 6. outcomes_summary
+# ---------------------------------------------------------------------------
+
+class TestOutcomesSummary(unittest.TestCase):
+    """outcomes_summary: read-only aggregation over memory_outcomes + atomic_memories."""
+
+    def _make_db(self):
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        db.init_db(path)
+        return path
+
+    def _add_fact(self, path, fact="a fact", category=None):
+        return memzero.add_memory(fact, category=category, db_path=path, llm=_NoEmbedLLM())["id"]
+
+    # 6a. zero outcomes -> zeros/empties, no error
+    def test_zero_outcomes_returns_zeros(self):
+        path = self._make_db()
+        try:
+            s = memzero.outcomes_summary(db_path=path)
+            self.assertEqual(s["total_outcomes"], 0)
+            self.assertEqual(s["by_outcome"], {"good": 0, "bad": 0, "neutral": 0})
+            self.assertEqual(s["by_source"], {"transcript": 0, "mcp": 0, "checkin": 0})
+            self.assertEqual(s["sessions_classified"], 0)
+            self.assertEqual(s["top_facts"], [])
+            self.assertEqual(s["worst_facts"], [])
+            self.assertEqual(s["retired_count"], 0)
+            self.assertEqual(s["retired_sample"], [])
+        finally:
+            os.unlink(path)
+
+    def test_zero_outcomes_no_error_on_missing_db(self):
+        s = memzero.outcomes_summary(db_path="/tmp/_nonexistent_psyche_test.db")
+        self.assertEqual(s["total_outcomes"], 0)
+
+    # 6b. mixed good/bad/neutral aggregate correctly
+    def test_mixed_outcomes_aggregate(self):
+        path = self._make_db()
+        try:
+            mid = self._add_fact(path)
+            memzero.record_outcome([mid], outcome="good", source="transcript",
+                                   session_id="s1", db_path=path)
+            memzero.record_outcome([mid], outcome="bad", source="mcp",
+                                   session_id="s2", db_path=path)
+            memzero.record_outcome([mid], outcome="neutral", source="checkin",
+                                   session_id="s3", confidence=0.2, db_path=path)
+            s = memzero.outcomes_summary(db_path=path)
+            self.assertEqual(s["total_outcomes"], 3)
+            self.assertEqual(s["by_outcome"]["good"], 1)
+            self.assertEqual(s["by_outcome"]["bad"], 1)
+            self.assertEqual(s["by_outcome"]["neutral"], 1)
+            self.assertEqual(s["by_source"]["transcript"], 1)
+            self.assertEqual(s["by_source"]["mcp"], 1)
+            self.assertEqual(s["by_source"]["checkin"], 1)
+            self.assertEqual(s["sessions_classified"], 3)
+        finally:
+            os.unlink(path)
+
+    # 6c. win_rate is None when wins+losses==0 (neutral-only outcomes)
+    def test_win_rate_none_when_no_wins_or_losses(self):
+        path = self._make_db()
+        try:
+            mid = self._add_fact(path)
+            # Only neutral rows — no counter bumps
+            memzero.record_outcome([mid], outcome="neutral", source="mcp",
+                                   session_id="s1", confidence=0.2, db_path=path)
+            # Manually set outcome_count so the fact appears in top_facts
+            conn = db.get_connection(path)
+            try:
+                conn.execute("UPDATE atomic_memories SET outcome_count=1 WHERE id=?", (mid,))
+                conn.commit()
+            finally:
+                conn.close()
+            s = memzero.outcomes_summary(db_path=path)
+            self.assertTrue(len(s["top_facts"]) > 0)
+            for fact in s["top_facts"]:
+                if fact["id"] == mid:
+                    self.assertIsNone(fact["win_rate"])
+        finally:
+            os.unlink(path)
+
+    # 6d. retired list reflects retired_at
+    def test_retired_sample_reflects_retired_at(self):
+        path = self._make_db()
+        try:
+            mid = self._add_fact(path, "memory to retire")
+            conn = db.get_connection(path)
+            try:
+                conn.execute(
+                    "UPDATE atomic_memories SET retired_at='2026-01-15T00:00:00+00:00' WHERE id=?",
+                    (mid,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            s = memzero.outcomes_summary(db_path=path)
+            self.assertEqual(s["retired_count"], 1)
+            self.assertEqual(len(s["retired_sample"]), 1)
+            self.assertEqual(s["retired_sample"][0]["id"], mid)
+            self.assertIn("2026-01-15", s["retired_sample"][0]["retired_at"])
+        finally:
+            os.unlink(path)
+
+    def test_retired_facts_excluded_from_top_and_worst(self):
+        # A retired (forgotten) memory must not surface in the top/worst tables —
+        # only in the retired section — even when it has recorded outcomes.
+        # Otherwise the view contradicts "hidden from injection".
+        path = self._make_db()
+        try:
+            keep = self._add_fact(path, "kept fact with a win")
+            gone = self._add_fact(path, "retired fact with a loss")
+            conn = db.get_connection(path)
+            try:
+                conn.execute(
+                    "UPDATE atomic_memories SET wins=1, losses=0, outcome_count=1 WHERE id=?",
+                    (keep,),
+                )
+                conn.execute(
+                    "UPDATE atomic_memories SET wins=0, losses=1, outcome_count=1, "
+                    "retired_at='2026-01-15T00:00:00+00:00' WHERE id=?",
+                    (gone,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            s = memzero.outcomes_summary(db_path=path)
+            top_ids = [f["id"] for f in s["top_facts"]]
+            worst_ids = [f["id"] for f in s["worst_facts"]]
+            self.assertNotIn(gone, top_ids)
+            self.assertNotIn(gone, worst_ids)
+            self.assertIn(keep, top_ids)
+            self.assertEqual(s["retired_count"], 1)
+            self.assertEqual(s["retired_sample"][0]["id"], gone)
+        finally:
+            os.unlink(path)
+
+    # 6e. top/worst ordering correct
+    def test_top_facts_ordering_win_rate_desc(self):
+        path = self._make_db()
+        try:
+            mid_high = self._add_fact(path, "high win-rate fact")
+            mid_low = self._add_fact(path, "low win-rate fact")
+            conn = db.get_connection(path)
+            try:
+                # high: 3 wins 1 loss  → 75%
+                conn.execute(
+                    "UPDATE atomic_memories SET wins=3, losses=1, outcome_count=4 WHERE id=?",
+                    (mid_high,),
+                )
+                # low: 1 win 3 losses → 25%
+                conn.execute(
+                    "UPDATE atomic_memories SET wins=1, losses=3, outcome_count=4 WHERE id=?",
+                    (mid_low,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            s = memzero.outcomes_summary(db_path=path)
+            top_ids = [f["id"] for f in s["top_facts"]]
+            self.assertIn(mid_high, top_ids)
+            self.assertIn(mid_low, top_ids)
+            # high win-rate should rank before low win-rate
+            self.assertLess(top_ids.index(mid_high), top_ids.index(mid_low))
+        finally:
+            os.unlink(path)
+
+    def test_worst_facts_ordering_win_rate_asc(self):
+        path = self._make_db()
+        try:
+            mid_bad = self._add_fact(path, "very bad fact")
+            mid_ok = self._add_fact(path, "mediocre fact")
+            conn = db.get_connection(path)
+            try:
+                # bad: 0 wins 4 losses → 0%
+                conn.execute(
+                    "UPDATE atomic_memories SET wins=0, losses=4, outcome_count=4 WHERE id=?",
+                    (mid_bad,),
+                )
+                # ok: 2 wins 2 losses → 50%
+                conn.execute(
+                    "UPDATE atomic_memories SET wins=2, losses=2, outcome_count=4 WHERE id=?",
+                    (mid_ok,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            s = memzero.outcomes_summary(db_path=path)
+            worst_ids = [f["id"] for f in s["worst_facts"]]
+            self.assertIn(mid_bad, worst_ids)
+            self.assertIn(mid_ok, worst_ids)
+            # worst (0% win-rate) should appear first
+            self.assertLess(worst_ids.index(mid_bad), worst_ids.index(mid_ok))
+        finally:
+            os.unlink(path)
+
+    # 6f. by_source counts correct
+    def test_by_source_counts(self):
+        path = self._make_db()
+        try:
+            mid = self._add_fact(path)
+            memzero.record_outcome([mid], outcome="good", source="transcript",
+                                   session_id="s1", db_path=path)
+            memzero.record_outcome([mid], outcome="good", source="transcript",
+                                   session_id="s2", db_path=path)
+            memzero.record_outcome([mid], outcome="good", source="checkin",
+                                   session_id="s3", db_path=path)
+            s = memzero.outcomes_summary(db_path=path)
+            self.assertEqual(s["by_source"]["transcript"], 2)
+            self.assertEqual(s["by_source"]["checkin"], 1)
+            self.assertEqual(s["by_source"]["mcp"], 0)
+        finally:
+            os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# 7. score_experiment_completion
 # ---------------------------------------------------------------------------
 
 class TestScoreExperimentCompletion(unittest.TestCase):

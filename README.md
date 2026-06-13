@@ -121,6 +121,9 @@ Psyche captures outcome signals so the memory store can improve over time. **Imp
 ### CLI commands
 
 ```bash
+# Observability window: see what the learning loop has captured.
+psyche mem outcomes
+
 # Search your memories for candidates to forget, then review and confirm.
 psyche mem forget "<search query>"
 
@@ -128,6 +131,8 @@ psyche mem forget "<search query>"
 psyche mem review
 psyche mem unforget <id>
 ```
+
+`psyche mem outcomes` shows total outcomes captured (good/bad/neutral), a breakdown by source (transcript/mcp/checkin), top facts by observed win-rate, and forget candidates. These are session-level correlation signals only — they are NOT causal proof, and ranking is NOT yet affected by them. Ranking on outcome counters will be enabled in a future release.
 
 ### MCP tools (any host)
 

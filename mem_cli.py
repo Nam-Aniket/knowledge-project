@@ -75,6 +75,9 @@ def main():
     p_forget.add_argument("query", help="Search query to find memories to forget.")
     p_forget.add_argument("--db-path")
 
+    p_outcomes = sub.add_parser("outcomes", help="Show what the experiential-learning loop has captured.")
+    p_outcomes.add_argument("--db-path")
+
     p_review = sub.add_parser("review", help="List currently soft-retired (hidden) memories.")
     p_review.add_argument("--db-path")
 
@@ -156,6 +159,66 @@ def main():
             console.print(f"[red]Permanently deleted {len(deleted)} memory/memories.[/red]")
         else:
             console.print(f"[dim]Memories remain retired (hidden). Use 'psyche mem unforget <id>' to restore.[/dim]")
+    elif args.action == "outcomes":
+        s = memzero.outcomes_summary(db_path=db_path)
+        if s["total_outcomes"] == 0:
+            console.print(
+                "[dim]No outcomes recorded yet — run a few sessions; "
+                "the SessionEnd hook scores them automatically.[/dim]"
+            )
+        else:
+            good = s["by_outcome"]["good"]
+            bad = s["by_outcome"]["bad"]
+            neutral = s["by_outcome"]["neutral"]
+            console.print(
+                f"[bold]Outcomes captured:[/bold] {s['total_outcomes']} total "
+                f"([green]{good} good[/green] / [red]{bad} bad[/red] / [dim]{neutral} neutral[/dim]) "
+                f"across {s['sessions_classified']} classified session(s)"
+            )
+            console.print(
+                f"[bold]By source:[/bold] "
+                f"transcript: {s['by_source']['transcript']}, "
+                f"mcp: {s['by_source']['mcp']}, "
+                f"checkin: {s['by_source']['checkin']}"
+            )
+            console.print(
+                "[dim]Note: these are observed session-level signals, NOT causal proof. "
+                "Ranking is NOT yet affected by them.[/dim]"
+            )
+            if s["top_facts"]:
+                console.print()
+                top_table = Table(show_header=True, header_style="bold cyan",
+                                  title="Top facts by win-rate (observed signal only)")
+                for col in ("id", "fact", "wins", "losses", "win_rate", "category"):
+                    top_table.add_column(col)
+                for r in s["top_facts"]:
+                    wr = f"{r['win_rate']:.0%}" if r["win_rate"] is not None else "—"
+                    top_table.add_row(
+                        str(r["id"]), r["fact"],
+                        str(r["wins"]), str(r["losses"]), wr,
+                        r.get("category") or "-",
+                    )
+                console.print(top_table)
+            if s["worst_facts"]:
+                console.print()
+                worst_table = Table(show_header=True, header_style="bold red",
+                                    title="Forget candidates (low win-rate)")
+                for col in ("id", "fact", "wins", "losses", "win_rate", "category"):
+                    worst_table.add_column(col)
+                for r in s["worst_facts"]:
+                    wr = f"{r['win_rate']:.0%}" if r["win_rate"] is not None else "—"
+                    worst_table.add_row(
+                        str(r["id"]), r["fact"],
+                        str(r["wins"]), str(r["losses"]), wr,
+                        r.get("category") or "-",
+                    )
+                console.print(worst_table)
+                console.print("[dim]To review and remove: psyche mem review[/dim]")
+            if s["retired_count"]:
+                console.print(
+                    f"\n[dim]{s['retired_count']} retired memory/memories hidden from injection. "
+                    f"Run 'psyche mem review' to inspect.[/dim]"
+                )
     elif args.action == "review":
         from db import get_connection
         from db import resolve_db_path as _resolve
