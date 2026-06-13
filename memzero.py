@@ -660,15 +660,26 @@ CACHE_DISCOUNT = {
 }
 
 
-def ledger_summary(path: str = None) -> dict:
+def ledger_summary(path: str = None, with_transcripts: bool = False,
+                   projects_root: str = None) -> dict:
     """Summarizes the hook injection ledger: total injections, facts and chars
     injected, and tokens injected estimated as chars/4 — which equals the
     re-derivation avoided (an injected fact is one the agent didn't re-derive).
-    Also computes cache-exposure metrics and a per-provider modeled savings estimate."""
+    Also computes cache-exposure metrics and a per-provider modeled savings estimate.
+
+    When with_transcripts=True, also reads Claude Code transcript JSONL files to
+    produce measured cache metrics (cache_read_total, cache_creation_total, etc.).
+    """
     path = path or MEM_LEDGER_PATH
     total_injections = total_facts = total_chars = 0
     session_start_count = prompt_submit_count = prompt_submit_facts = 0
     block_hashes: set = set()
+    # For transcript pass: list of (session_id, cwd) for session_start events.
+    session_starts: list = []
+    # For per-project block-change metric: cwd -> set of block_hashes.
+    cwd_block_hashes: dict = {}
+    # For block_tokens approximation: sum of session_start chars.
+    session_start_chars_total = 0
     try:
         with open(path) as f:
             for line in f:
@@ -682,16 +693,26 @@ def ledger_summary(path: str = None) -> dict:
                 event = entry.get("event", "")
                 if event == "session_start":
                     session_start_count += 1
+                    session_start_chars_total += int(entry.get("chars", 0))
                     bh = entry.get("block_hash")
                     if bh:
                         block_hashes.add(bh)
+                    cwd = entry.get("cwd")
+                    session_starts.append((entry.get("session_id", ""), cwd))
+                    # Per-project block-hash grouping.
+                    bucket = cwd if cwd is not None else "(unknown)"
+                    if bh:
+                        cwd_block_hashes.setdefault(bucket, set()).add(bh)
                 elif event == "prompt_submit":
                     prompt_submit_count += 1
                     prompt_submit_facts += int(entry.get("count", 0))
     except OSError:
         pass
     distinct_session_blocks = len(block_hashes)
-    session_block_changes = max(0, distinct_session_blocks - 1)
+    # Per-project block-change metric: sum distinct_in_group - 1 per group.
+    session_block_changes = sum(
+        max(0, len(hashes) - 1) for hashes in cwd_block_hashes.values()
+    )
     tokens_injected = total_chars // 4
     provider = (
         os.getenv("CHAT_PROVIDER", "").lower()
@@ -699,7 +720,7 @@ def ledger_summary(path: str = None) -> dict:
     )
     discount = CACHE_DISCOUNT.get(provider, CACHE_DISCOUNT["anthropic"])
     estimated_savings_tokens = int(tokens_injected * discount)
-    return {
+    result = {
         "total_injections": total_injections,
         "total_facts": total_facts,
         "total_chars": total_chars,
@@ -713,6 +734,56 @@ def ledger_summary(path: str = None) -> dict:
         "cache_discount_used": discount,
         "cache_provider_used": provider or "anthropic",
     }
+    if with_transcripts:
+        try:
+            import transcript_usage  # noqa: PLC0415
+            cache_read_total = cache_creation_total = input_uncached_total = 0
+            measured_sessions = warm_sessions = 0
+            for sid, cwd in session_starts:
+                kwargs = {}
+                if projects_root is not None:
+                    kwargs["projects_root"] = projects_root
+                tpath = transcript_usage.transcript_path(sid, cwd, **kwargs)
+                if tpath is None:
+                    continue
+                usage = transcript_usage.parse_transcript_usage(tpath)
+                if usage["turns"] == 0:
+                    continue
+                measured_sessions += 1
+                cache_read_total += usage["cache_read"]
+                cache_creation_total += usage["cache_creation"]
+                input_uncached_total += usage["input_uncached"]
+                if usage["cache_read"] > 0:
+                    warm_sessions += 1
+            measured_coverage = (
+                measured_sessions / session_start_count if session_start_count else 0
+            )
+            denom = cache_read_total + cache_creation_total + input_uncached_total
+            cache_read_share = cache_read_total / denom if denom else 0
+            # block_tokens: average session_start chars // 4 (approximation).
+            block_tokens = (
+                session_start_chars_total // session_start_count // 4
+                if session_start_count else 0
+            )
+            block_tokens_exact = False
+            psyche_avoided_tokens = int(block_tokens * (1.25 - 0.1) * warm_sessions)
+            psyche_block_read_tokens = int(block_tokens * 0.1 * warm_sessions)
+            result.update({
+                "measured_sessions": measured_sessions,
+                "measured_coverage": measured_coverage,
+                "cache_read_total": cache_read_total,
+                "cache_creation_total": cache_creation_total,
+                "input_uncached_total": input_uncached_total,
+                "cache_read_share": cache_read_share,
+                "warm_sessions": warm_sessions,
+                "block_tokens": block_tokens,
+                "block_tokens_exact": block_tokens_exact,
+                "psyche_avoided_tokens": psyche_avoided_tokens,
+                "psyche_block_read_tokens": psyche_block_read_tokens,
+            })
+        except Exception:
+            pass
+    return result
 
 
 def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None,
