@@ -73,10 +73,28 @@ def ledger_path(session_id: str) -> str:
     return f"/tmp/psyche_mem_ledger_{safe}.json"
 
 
+def _durable_ledger_path(session_id: str) -> str:
+    safe = "".join(c for c in (session_id or "unknown") if c.isalnum() or c in "-_")
+    return os.path.expanduser(f"~/.psyche/sessions/{safe}.json")
+
+
 def read_ledger(session_id: str) -> set:
+    # Prefer durable copy, fall back to /tmp.
+    for path in (_durable_ledger_path(session_id), ledger_path(session_id)):
+        try:
+            with open(path) as f:
+                return set(json.load(f))
+        except Exception:
+            continue
+    return set()
+
+
+def read_injected_ids(session_id: str) -> set:
+    """Returns the set of injected memory IDs (ints) for a session.
+    Returns an empty set on any failure."""
     try:
-        with open(ledger_path(session_id)) as f:
-            return set(json.load(f))
+        raw = read_ledger(session_id)
+        return {int(x) for x in raw}
     except Exception:
         return set()
 
@@ -87,8 +105,17 @@ def stable_block_hash(text: str) -> str:
 
 
 def write_ledger(session_id: str, ids: set):
+    # Write to /tmp (primary).
     try:
         with open(ledger_path(session_id), "w") as f:
+            json.dump(sorted(ids), f)
+    except Exception:
+        pass
+    # Also mirror to durable ~/.psyche/sessions/<sid>.json.
+    try:
+        durable = _durable_ledger_path(session_id)
+        os.makedirs(os.path.dirname(durable), exist_ok=True)
+        with open(durable, "w") as f:
             json.dump(sorted(ids), f)
     except Exception:
         pass

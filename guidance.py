@@ -6,6 +6,7 @@ Connects knowledge retrieval to structured decision-making.
 Supports the loop: goal → diagnose → retrieve → brief → experiment → review → rule.
 """
 import os
+import re
 import sys
 import json
 import argparse
@@ -499,6 +500,65 @@ def _parse_checkin_response(raw):
     return obj
 
 
+_THRESHOLD_RE = re.compile(r"(>=|<=|>|<|=)\s*([\d.]+)")
+
+
+def score_experiment_completion(experiment: dict, metric_logs: list) -> "str | None":
+    """Deterministically score an experiment as 'good', 'bad', or None.
+
+    Parses `experiment['success_condition']` for a numeric comparator
+    (>=, <=, >, <, =) and compares the latest matching metric_log value.
+
+    Returns 'good' if the condition is met, 'bad' if it is not, or None
+    when no numeric threshold can be parsed or no matching metric log exists.
+    """
+    success_condition = (experiment.get("success_condition") or "").strip()
+    if not success_condition:
+        return None
+
+    m = _THRESHOLD_RE.search(success_condition)
+    if not m:
+        return None
+
+    comparator = m.group(1)
+    try:
+        threshold = float(m.group(2))
+    except ValueError:
+        return None
+
+    metric_name = (experiment.get("metric_name") or "").strip()
+    # Find the most recent log entry for this experiment's metric, or any
+    # matching-name entry if no metric_name is set.
+    latest = None
+    for log in metric_logs:
+        if metric_name:
+            if (log.get("metric_name") or "") != metric_name:
+                continue
+        if log.get("value") is not None:
+            if latest is None or (log.get("logged_at") or "") > (latest.get("logged_at") or ""):
+                latest = log
+
+    if latest is None:
+        return None
+
+    try:
+        actual = float(latest["value"])
+    except (TypeError, ValueError):
+        return None
+
+    met = {
+        ">=": actual >= threshold,
+        "<=": actual <= threshold,
+        ">":  actual > threshold,
+        "<":  actual < threshold,
+        "=":  actual == threshold,
+    }.get(comparator)
+
+    if met is None:
+        return None
+    return "good" if met else "bad"
+
+
 def checkin_plan(goal_id: int, update_text: str, db_path: str, llm) -> dict:
     """Follow-through on an active plan: assess progress per experiment, log
     reviews, complete/adjust experiments, and store key decisions as atomic
@@ -592,6 +652,21 @@ def checkin_plan(goal_id: int, update_text: str, db_path: str, llm) -> dict:
         conn.commit()
     finally:
         conn.close()
+
+    # Auto-score experiments with deterministic thresholds — best-effort, never raises.
+    try:
+        for exp in experiments:
+            score = score_experiment_completion(exp, metric_logs)
+            if score is not None:
+                memzero.record_outcome(
+                    outcome=score,
+                    confidence=1.0,
+                    source="checkin",
+                    session_id=None,
+                    db_path=db_path,
+                )
+    except Exception:
+        pass
 
     result["summary"] = parsed.get("summary", "")
     for decision_text in (parsed.get("key_decisions") or [])[:3]:

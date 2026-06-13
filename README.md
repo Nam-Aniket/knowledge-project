@@ -106,6 +106,42 @@ The mechanics that make it free and fast:
 
 ---
 
+## Experiential Learning (v0.8)
+
+Psyche captures outcome signals so the memory store can improve over time. **Important caveat: the frontier model's weights do not change.** What changes is the quality of the stored facts — bad or stale ones can be removed, and the system records which facts were present during sessions that went well versus sessions that went poorly. Ranking on outcome counters is not yet enabled; this release is capture and forgetting only.
+
+### How it works
+
+1. **Outcome capture.** When a Claude Code session ends, the `SessionEnd` hook classifies the session as `good`, `bad`, or `neutral` and calls `record_outcome` against the memory IDs that were injected during that session. Each outcome writes an audit row to `memory_outcomes` and, for non-neutral outcomes with confidence >= 0.5, increments `wins` or `losses` on the relevant `atomic_memories` rows. A per-`(memory_id, day)` cap prevents a single noisy session from inflating counters.
+
+2. **Permissioned forgetting.** You can soft-retire memories (they are hidden from retrieval but not deleted) or hard-delete them after reviewing. Retired memories have `retired_at` set and are excluded from `search_memories` and session-start injection. `unforget` clears `retired_at` and restores a memory to active status.
+
+3. **Check-in auto-scoring.** When you run `psyche checkin` and an experiment's `success_condition` contains a parseable numeric comparator (`>=`, `<=`, `>`, `<`, `=`), Psyche deterministically scores the experiment as `good` or `bad` against the latest logged metric value and records the outcome.
+
+### CLI commands
+
+```bash
+# Search your memories for candidates to forget, then review and confirm.
+psyche mem forget "<search query>"
+
+# List recently retired memories and unretire one by ID.
+psyche mem review
+psyche mem unforget <id>
+```
+
+### MCP tools (any host)
+
+| Tool | What it does |
+|------|-------------|
+| `record_outcome` | Record `good`/`bad`/`neutral` against a list of memory IDs or rule IDs. |
+| `forget_memory` | Soft-retire memories matching a query, or hard-delete by ID with `confirm=true, hard=true`. |
+| `unforget` | Clear `retired_at` on specific IDs, restoring them to active. |
+
+> [!NOTE]
+> The durable injection ledger (`~/.psyche/sessions/<session_id>.json`) records which memory IDs were injected in each session. The `SessionEnd` hook reads this ledger to know which facts to score. The ledger is written at session start and mirrored to `/tmp` for fast reads during the session.
+
+---
+
 ## 🧭 Personal Upgrade & Guidance Engine
 
 Psyche goes beyond static memory by actively tracking your goals, experiments, and learnings across domains (Business, Health, Wealth, Career, Happiness, and Ideation). AI agents use this layer to act as your personal coach, grounded strictly in the knowledge you have ingested.

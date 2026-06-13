@@ -403,6 +403,7 @@ def search_memories(query: str, agent_id: str = None, top: int = 8,
         sql = (
             f"SELECT id, fact, category, agent_id, updated_at, project, retrieval_count "
             f"FROM atomic_memories WHERE id IN ({placeholders}) AND superseded_by IS NULL"
+            f" AND retired_at IS NULL"
         )
         params = list(ranked_ids)
         if agent_id:
@@ -802,7 +803,8 @@ def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None,
         try:
             sql = (
                 "SELECT id, fact, category, agent_id, updated_at, project FROM atomic_memories "
-                "WHERE superseded_by IS NULL AND category IN ('preference','decision','lesson') "
+                "WHERE superseded_by IS NULL AND retired_at IS NULL"
+                " AND category IN ('preference','decision','lesson') "
             )
             params = []
             if project:
@@ -830,3 +832,190 @@ def standing_fact_rows(top: int = 12, db_path: str = None, project: str = None,
 
 def standing_facts(top: int = 12, db_path: str = None, max_chars: int = 1500) -> str:
     return format_facts(standing_fact_rows(top, db_path), max_chars=max_chars)
+
+
+def record_outcome(memory_ids=None, rule_ids=None, outcome="neutral", confidence=1.0,
+                   source="mcp", session_id=None, db_path=None) -> dict:
+    """Record whether injected memories/rules helped.
+
+    outcome in {"good","bad","neutral"}.
+    neutral (or confidence < 0.5) writes an audit row but skips counter bumps.
+    Per-day cap: at most one counter increment per (memory_id, day).
+    Returns {"recorded": n, "memory_ids": [...], "outcome": outcome}.
+    Never raises.
+    """
+    memory_ids = list(memory_ids or [])
+    rule_ids = list(rule_ids or [])
+    if outcome not in ("good", "bad", "neutral"):
+        outcome = "neutral"
+
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return {"recorded": 0, "memory_ids": [], "outcome": outcome}
+
+    now = _now()
+    today = now[:10]
+    skip_counters = (outcome == "neutral") or (confidence < 0.5)
+    recorded = 0
+
+    conn = get_connection(resolved)
+    try:
+        for mid in memory_ids:
+            try:
+                mid = int(mid)
+            except (TypeError, ValueError):
+                continue
+            # Verify memory exists
+            row = conn.execute(
+                "SELECT id FROM atomic_memories WHERE id = ?", (mid,)
+            ).fetchone()
+            if not row:
+                continue
+            # Always write audit row
+            conn.execute(
+                "INSERT INTO memory_outcomes "
+                "(session_id, source, outcome, confidence, memory_id, rule_id, was_exploration, created_at) "
+                "VALUES (?, ?, ?, ?, ?, NULL, 0, ?)",
+                (session_id, source, outcome, confidence, mid, now),
+            )
+            if not skip_counters:
+                # Per-day cap: check if a non-neutral outcome was already recorded today
+                existing = conn.execute(
+                    "SELECT id FROM memory_outcomes WHERE memory_id = ? AND created_at LIKE ? "
+                    "AND outcome != 'neutral' AND id != last_insert_rowid()",
+                    (mid, f"{today}%"),
+                ).fetchone()
+                if not existing:
+                    if outcome == "good":
+                        conn.execute(
+                            "UPDATE atomic_memories SET wins = wins + 1, "
+                            "outcome_count = outcome_count + 1, last_outcome_at = ? WHERE id = ?",
+                            (now, mid),
+                        )
+                    elif outcome == "bad":
+                        conn.execute(
+                            "UPDATE atomic_memories SET losses = losses + 1, "
+                            "outcome_count = outcome_count + 1, last_outcome_at = ? WHERE id = ?",
+                            (now, mid),
+                        )
+            recorded += 1
+
+        for rid in rule_ids:
+            try:
+                rid = int(rid)
+            except (TypeError, ValueError):
+                continue
+            # Verify rule exists
+            row = conn.execute(
+                "SELECT id FROM rules WHERE id = ?", (rid,)
+            ).fetchone()
+            if not row:
+                continue
+            conn.execute(
+                "INSERT INTO memory_outcomes "
+                "(session_id, source, outcome, confidence, memory_id, rule_id, was_exploration, created_at) "
+                "VALUES (?, ?, ?, ?, NULL, ?, 0, ?)",
+                (session_id, source, outcome, confidence, rid, now),
+            )
+            if not skip_counters:
+                existing = conn.execute(
+                    "SELECT id FROM memory_outcomes WHERE rule_id = ? AND created_at LIKE ? "
+                    "AND outcome != 'neutral' AND id != last_insert_rowid()",
+                    (rid, f"{today}%"),
+                ).fetchone()
+                if not existing:
+                    if outcome == "good":
+                        conn.execute(
+                            "UPDATE rules SET wins = wins + 1, last_outcome_at = ? WHERE id = ?",
+                            (now, rid),
+                        )
+                    elif outcome == "bad":
+                        conn.execute(
+                            "UPDATE rules SET losses = losses + 1, last_outcome_at = ? WHERE id = ?",
+                            (now, rid),
+                        )
+            recorded += 1
+
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+    return {"recorded": recorded, "memory_ids": memory_ids, "outcome": outcome}
+
+
+def forget_memory(query=None, ids=None, confirm=False, hard=False, db_path=None) -> dict:
+    """Soft-retire or hard-delete memories with user confirmation.
+
+    - query given, no ids: hybrid-search candidates, soft-retire them immediately,
+      return {"candidates": [...], "retired": [ids], "mode": "pending_confirm"}.
+    - ids + confirm=True + hard=True: hard-delete those rows.
+    - ids + confirm=True + hard=False: confirm the soft-retire (they stay hidden).
+    Never raises.
+    """
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return {"candidates": [], "retired": [], "mode": "no_db"}
+
+    now = _now()
+
+    if ids is not None and confirm and hard:
+        # Hard-delete the specified ids
+        ids = [int(i) for i in ids if i is not None]
+        deleted = []
+        for mid in ids:
+            if delete_memory(mid, db_path=db_path):
+                deleted.append(mid)
+        return {"deleted": deleted}
+
+    if ids is not None and confirm and not hard:
+        # Confirmed soft-retire (already retired by the query path; just acknowledge)
+        ids = [int(i) for i in ids if i is not None]
+        return {"retired": ids, "mode": "confirmed"}
+
+    if query:
+        # Search for candidates and soft-retire immediately
+        results = search_memories(query, top=10, db_path=db_path)
+        if not results:
+            return {"candidates": [], "retired": [], "mode": "pending_confirm"}
+        candidate_ids = [r["id"] for r in results]
+        conn = get_connection(resolved)
+        try:
+            placeholders = ",".join("?" for _ in candidate_ids)
+            conn.execute(
+                f"UPDATE atomic_memories SET retired_at = ? WHERE id IN ({placeholders})",
+                [now] + candidate_ids,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        candidates = [
+            {"id": r["id"], "fact": r["fact"], "category": r.get("category"),
+             "score": r.get("similarity", 0.0)}
+            for r in results
+        ]
+        return {"candidates": candidates, "retired": candidate_ids, "mode": "pending_confirm"}
+
+    return {"candidates": [], "retired": [], "mode": "noop"}
+
+
+def unforget(ids, db_path=None) -> dict:
+    """Clear retired_at on the given memory ids, making them live again."""
+    ids = [int(i) for i in (ids or []) if i is not None]
+    if not ids:
+        return {"unretired": []}
+    resolved = resolve_db_path(db_path)
+    if not os.path.exists(resolved):
+        return {"unretired": []}
+    conn = get_connection(resolved)
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        conn.execute(
+            f"UPDATE atomic_memories SET retired_at = NULL WHERE id IN ({placeholders})",
+            ids,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"unretired": ids}

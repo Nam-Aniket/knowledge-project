@@ -2,6 +2,23 @@
 
 All notable changes to the **Psyche** project will be documented in this file.
 
+## [0.8.0] - Unreleased
+
+### Added
+- **Outcome-capture ledger**: `record_outcome(memory_ids, rule_ids, outcome, confidence, source, session_id)` increments `wins`/`losses` on `atomic_memories` and `rules` rows for non-neutral outcomes with confidence >= 0.5; writes an audit row to the new `memory_outcomes` table in all cases. A per-`(memory_id, day)` cap prevents a single session from double-counting.
+- **Automatic outcome capture at session end** (Claude Code hooks): the `SessionEnd`/`PreCompact` hook classifies the session transcript as `good`/`bad`/`neutral` using a cheap proxy-hint + LLM classifier and calls `record_outcome` against the injected IDs recovered from the durable session ledger.
+- **Durable injected-ID ledger**: `write_ledger` now mirrors the injected-ID set to `~/.psyche/sessions/<session_id>.json` in addition to `/tmp`; `read_injected_ids` prefers the durable copy for reliability across session-end timing.
+- **Permissioned forget/retraction**: `forget_memory(query=...)` soft-retires matching memories by setting `retired_at`; `forget_memory(ids=[...], confirm=True, hard=True)` hard-deletes. Retired memories are excluded from `search_memories` and `standing_fact_rows`. `unforget(ids)` clears `retired_at`.
+- **`psyche mem forget/review/unforget` CLI subcommands** for interactive memory management.
+- **`forget_memory`, `record_outcome`, `unforget` MCP tools** registered on the MCP server for use from any host agent.
+- **Check-in auto-scoring** (`score_experiment_completion`): when `checkin_plan` assesses an experiment, if `success_condition` contains a numeric comparator (`>=`, `<=`, `>`, `<`, `=`) and a matching metric log exists, the experiment is scored deterministically and `record_outcome` is called with `source="checkin"`.
+- **Schema migration v4** (`SCHEMA_VERSION = 4`): adds `wins`, `losses`, `outcome_count`, `last_outcome_at`, `retired_at` to `atomic_memories`; `wins`, `losses`, `last_outcome_at` to `rules`; new `memory_outcomes` audit table.
+
+### Notes
+- Outcome counters (`wins`/`losses`) are captured only — they do not yet influence retrieval ranking. The ranking effect will be enabled in a future release once sufficient signal has been collected.
+
+---
+
 ## [0.7.0] - 2026-06-12
 
 ### Added

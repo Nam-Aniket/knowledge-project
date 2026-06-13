@@ -71,6 +71,17 @@ def main():
     p_stats = sub.add_parser("stats", help="Memory store statistics.")
     p_stats.add_argument("--db-path")
 
+    p_forget = sub.add_parser("forget", help="Soft-retire memories matching a query, then optionally hard-delete.")
+    p_forget.add_argument("query", help="Search query to find memories to forget.")
+    p_forget.add_argument("--db-path")
+
+    p_review = sub.add_parser("review", help="List currently soft-retired (hidden) memories.")
+    p_review.add_argument("--db-path")
+
+    p_unforget = sub.add_parser("unforget", help="Restore a soft-retired memory by id.")
+    p_unforget.add_argument("id", type=int, help="Memory id to restore.")
+    p_unforget.add_argument("--db-path")
+
     args = parser.parse_args()
     db_path = _db(args)
 
@@ -122,6 +133,62 @@ def main():
             console.print("[bold]By project:[/bold] " + ", ".join(f"{k}: {v}" for k, v in s["by_project"].items()))
         console.print(f"[bold]Total retrievals:[/bold] {s['total_retrievals']} · [bold]Never retrieved:[/bold] {s['never_retrieved']}")
         _print_ledger_section()
+    elif args.action == "forget":
+        result = memzero.forget_memory(query=args.query, db_path=db_path)
+        candidates = result.get("candidates", [])
+        retired = result.get("retired", [])
+        if not candidates:
+            console.print("[dim]No memories found matching that query.[/dim]")
+            return
+        table = Table(show_header=True, header_style="bold cyan")
+        for col in ("id", "fact", "category", "score"):
+            table.add_column(col)
+        for c in candidates:
+            table.add_row(str(c["id"]), c["fact"], c.get("category") or "-",
+                          f"{c.get('score', 0.0):.3f}")
+        console.print(table)
+        console.print(f"[yellow]{len(retired)} memory/memories soft-retired (hidden from injection).[/yellow]")
+        console.print(f"[dim]To undo: psyche mem unforget <id>[/dim]")
+        from rich.prompt import Confirm
+        if Confirm.ask(f"Permanently delete these {len(retired)} memory/memories? (No = keep them retired/hidden)"):
+            hard_result = memzero.forget_memory(ids=retired, confirm=True, hard=True, db_path=db_path)
+            deleted = hard_result.get("deleted", [])
+            console.print(f"[red]Permanently deleted {len(deleted)} memory/memories.[/red]")
+        else:
+            console.print(f"[dim]Memories remain retired (hidden). Use 'psyche mem unforget <id>' to restore.[/dim]")
+    elif args.action == "review":
+        from db import get_connection
+        from db import resolve_db_path as _resolve
+        resolved = _resolve(db_path)
+        conn = get_connection(resolved)
+        try:
+            rows = conn.execute(
+                "SELECT id, fact, category, project, retrieval_count, updated_at, retired_at "
+                "FROM atomic_memories WHERE retired_at IS NOT NULL ORDER BY retired_at DESC LIMIT 100"
+            ).fetchall()
+        except Exception:
+            rows = []
+        finally:
+            conn.close()
+        if not rows:
+            console.print("[dim]No retired memories.[/dim]")
+            return
+        table = Table(show_header=True, header_style="bold yellow")
+        for col in ("id", "fact", "category", "project", "hits", "updated", "retired_at"):
+            table.add_column(col)
+        for r in rows:
+            table.add_row(
+                str(r[0]), r[1], r[2] or "-", r[3] or "(global)",
+                str(r[4] or 0), (r[5] or "")[:10], (r[6] or "")[:10],
+            )
+        console.print(table)
+        console.print(f"[dim]{len(rows)} retired memory/memories. Use 'psyche mem unforget <id>' to restore.[/dim]")
+    elif args.action == "unforget":
+        result = memzero.unforget(ids=[args.id], db_path=db_path)
+        if result["unretired"]:
+            console.print(f"[green]Restored memory #{args.id}.[/green]")
+        else:
+            console.print(f"[red]Memory #{args.id} not found or not retired.[/red]")
 
 
 def _print_ledger_section():
