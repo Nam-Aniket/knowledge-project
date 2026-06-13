@@ -2,6 +2,22 @@
 
 All notable changes to the **Psyche** project will be documented in this file.
 
+## [0.7.0] - 2026-06-12
+
+### Added
+- **Host-agent guidance (BYO-model)**: when no chat model is configured, `generate_guidance` now returns a structured `synthesis_pack` (retrieved context + plan schema + instruction) and a new `submit_guidance_plan` MCP tool that validates and materializes the host-agent-authored plan through the existing parser/materialization path — turning the old retrieval-only dead end into a tracked, agent-agnostic protocol. Plans carry a `synthesized_by` provenance field (`host-agent` vs `psyche-llm`) and dedup against recent identical goals.
+- **`CHAT_PROVIDER`**: decouples the chat model from the embedding provider (defaults to `LLM_PROVIDER`, so existing configs are unchanged), letting local-embedding users pair an Ollama/Gemini/OpenAI chat model for terminal `psyche guide`.
+- **Cache-stable injections**: the session-start memory block is now ordered by immutable `id` and rendered without per-fact dates, making it byte-stable across sessions so it no longer breaks the host model's prompt cache.
+- **Per-provider cache-exposure metric**: the token ledger records the session-start block hash and `psyche mem stats` reports how often the cacheable prefix changed across sessions, plus a clearly-labeled modeled savings estimate using a per-provider discount table (Anthropic/OpenAI/Gemini).
+- **Measured cache metrics in `psyche mem stats`**: real `cache_read`/`cache_creation` counts read from Claude Code transcripts; replaced the modeled savings figure with measured cache share + block-attributable cost-avoidance; per-project block-change metric.
+- **Protocol guidance**: the `psyche connect` protocol block now documents the synthesis-pack flow and append-only placement of memory content.
+
+### Notes
+- Single-sourced the version via `mcp_server.__version__`; `pyproject.toml`, `package.json`, and the README badge are manual mirrors (resolves prior 0.4.0/0.5.0/0.6.0 drift).
+- No schema migration — `SCHEMA_VERSION` remains 3.
+
+---
+
 ## [0.6.0] - 2026-06-12
 
 ### Added

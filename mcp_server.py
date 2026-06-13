@@ -10,6 +10,10 @@ import hashlib
 import re
 import traceback
 
+# Single source of truth for the Psyche version. pyproject.toml, package.json,
+# and the README badge are manual mirrors of this value.
+__version__ = "0.7.0"
+
 # Save real stdout and redirect standard output to stderr
 real_stdout = sys.stdout
 sys.stdout = sys.stderr
@@ -274,7 +278,7 @@ def main():
                     },
                     "serverInfo": {
                         "name": "psyche-mcp",
-                        "version": "0.6.0"
+                        "version": __version__
                     }
                 }
             elif method == "notifications/initialized":
@@ -539,6 +543,29 @@ def main():
                             }
                         },
                         {
+                            "name": "submit_guidance_plan",
+                            "description": "Validate and materialize a host-agent-synthesized plan JSON into Psyche goals and experiments. Use this after generate_guidance returns mode==synthesis_pack.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "plan_json": {
+                                        "type": "string",
+                                        "description": "The plan as a JSON string conforming to the Psyche plan schema."
+                                    },
+                                    "apply": {
+                                        "type": "boolean",
+                                        "description": "If true (default), materialize the plan. If false, return a preview without creating records.",
+                                        "default": True
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["plan_json"]
+                            }
+                        },
+                        {
                             "name": "add_memory",
                             "description": "Store a durable atomic fact (user preference, decision, lesson, or stable project fact) in cross-agent memory. Near-duplicates are skipped automatically.",
                             "inputSchema": {
@@ -777,6 +804,12 @@ def main():
                         from guidance import checkin_tool
                         text_result = checkin_tool(
                             arguments.get("goal_id"), arguments.get("update"), arguments.get("topic")
+                        )
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
+                    elif tool_name == "submit_guidance_plan":
+                        from guidance import submit_guidance_plan_tool
+                        text_result = submit_guidance_plan_tool(
+                            arguments.get("plan_json"), arguments.get("topic"), apply=arguments.get("apply", True)
                         )
                         resp["result"] = {"content": [{"type": "text", "text": text_result}]}
                     elif tool_name == "add_memory":

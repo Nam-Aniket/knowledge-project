@@ -3,7 +3,7 @@
 <div align="center">
   <p><strong>Give any AI assistant searchable, cited access to your private notes and documents.</strong></p>
 
-  [![Version](https://img.shields.io/badge/version-0.5.0-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
+  [![Version](https://img.shields.io/badge/version-0.7.0-blueviolet.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](https://github.com/Nam-Aniket/psyche)
   [![Model Context Protocol](https://img.shields.io/badge/MCP-Enabled-orange.svg?style=for-the-badge)](https://modelcontextprotocol.io)
@@ -92,6 +92,7 @@ The mechanics that make it free and fast:
 *   ✂️ **ADD-only writes with a cosine duplicate guard** — no per-fact LLM judging loops burning API calls; conflicts resolve at read time by recency.
 *   🎯 **Similarity-gated injection** — weak matches inject *nothing*. A session-level ledger guarantees a fact is never injected twice. Memory that wastes tokens isn't memory, it's noise.
 *   🔍 **Three-signal retrieval** — HNSW vector search + FTS5 keywords + entity matching, fused with RRF. The same retrieval stack that powers `search_knowledge`, on a dedicated facts index that never pollutes your document search.
+*   **Cache-stable memory injection.** Psyche injects your standing facts as a byte-stable, cache-aligned block: facts are ordered by immutable id with volatile fields (timestamps) stripped, so the injected prefix is identical across sessions. Unlike memory injectors that stamp timestamps or re-rank by recency — which change the prefix and force the host model to *re-write* its prompt cache (1.25× input price) instead of *reading* it (0.1×) — Psyche's block stays cache-warm and never becomes a source of cache churn. `psyche mem stats` reports **measured** cache behavior straight from your Claude Code transcripts, and clearly separates host-cache context from what's attributable to Psyche. We deliberately don't headline a "saves you X%" number, because the honest, attributable effect is cost-*avoidance* versus a cache-busting design, not a blanket discount.
 
 ### Per-agent integration
 

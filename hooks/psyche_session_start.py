@@ -8,14 +8,16 @@ def main():
     session_id = payload.get("session_id", "")
     import memzero
     project = memzero.project_key_for(hc.cwd_from_payload(payload))
-    rows = memzero.standing_fact_rows(top=12, project=project)
+    rows = memzero.standing_fact_rows(top=12, project=project, stable=True)
     if not rows:
         return
-    text = memzero.format_facts(rows, max_chars=1500)
+    text = memzero.format_facts(rows, max_chars=1500, include_date=False)
     print("Known durable facts about this user/project (Psyche memory):")
     print(text)
     hc.write_ledger(session_id, hc.read_ledger(session_id) | {r["id"] for r in rows})
-    hc.append_ledger("session_start", session_id, len(rows), len(text))
+    h = hc.stable_block_hash(text)
+    hc.append_ledger("session_start", session_id, len(rows), len(text), block_hash=h,
+                     cwd=hc.cwd_from_payload(payload))
     hc.log(f"session_start {session_id}: injected {len(rows)} facts")
 
 

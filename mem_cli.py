@@ -128,15 +128,48 @@ def _print_ledger_section():
     """Token ledger summary (populated by the hook injection ledger)."""
     if not hasattr(memzero, "ledger_summary"):
         return
-    summary = memzero.ledger_summary()
+    summary = memzero.ledger_summary(with_transcripts=True)
     if summary["total_injections"] == 0:
         return
     console.print(
         f"\n[bold]Token ledger[/bold] — injections: {summary['total_injections']}, "
         f"facts injected: {summary['total_facts']}, "
-        f"tokens injected: ~{summary['tokens_injected']} (estimate, ~chars/4), "
+        f"tokens injected (approx, ~chars/4): ~{summary['tokens_injected']}, "
         f"re-derivation avoided: ~{summary['tokens_injected']} tokens"
     )
+    console.print(
+        f"[bold]Cache exposure[/bold] — "
+        f"block changes within project: {summary.get('session_block_changes', 0)} across "
+        f"{summary.get('session_start_count', 0)} sessions (lower is better) · "
+        f"prompt facts: {summary.get('prompt_submit_facts', 0)} over "
+        f"{summary.get('prompt_submit_count', 0)} turns"
+    )
+    measured_sessions = summary.get("measured_sessions", 0)
+    session_start_count = summary.get("session_start_count", 0)
+    if measured_sessions > 0:
+        cache_read_share = summary.get("cache_read_share", 0)
+        coverage_note = ""
+        measured_coverage = summary.get("measured_coverage", 1.0)
+        if 0 < measured_coverage < 1:
+            coverage_note = f" ({measured_sessions}/{session_start_count} sessions had transcripts)"
+        console.print(
+            f"[bold]Measured cache (Claude Code)[/bold] — "
+            f"{cache_read_share:.0%} of input tokens served from prompt cache "
+            f"across {measured_sessions} sessions "
+            f"(measured from transcripts; reflects Claude Code's whole cached prefix, "
+            f"not Psyche alone){coverage_note}"
+        )
+    warm_sessions = summary.get("warm_sessions", 0)
+    if warm_sessions > 0:
+        block_tokens = summary.get("block_tokens", 0)
+        psyche_avoided_tokens = summary.get("psyche_avoided_tokens", 0)
+        console.print(
+            f"[bold]Psyche cost-avoidance[/bold] — "
+            f"stable block ~{block_tokens} tok kept warm at 0.1x on {warm_sessions} warm sessions; "
+            f"vs a cache-busting injector (re-write at 1.25x), "
+            f"avoided ~{psyche_avoided_tokens} input-token-equivalents "
+            f"(modeled, block-attributable)"
+        )
 
 
 if __name__ == "__main__":
