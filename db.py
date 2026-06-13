@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 # Current schema version. Bump this whenever the schema changes and append a
 # matching (version, callable) pair to MIGRATIONS below.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _create_atomic_memory_tables(conn: sqlite3.Connection):
@@ -62,12 +62,64 @@ def _migrate_v3_actionable_and_project(conn: sqlite3.Connection):
             pass
 
 
+def _migrate_v4_experiential_learning(conn: sqlite3.Connection):
+    """v4: outcome-capture counters on atomic_memories and rules; retired_at
+    for permissioned soft-retire; memory_outcomes audit ledger."""
+    cur = conn.cursor()
+    # atomic_memories: outcome counters + soft-retire column
+    for ddl in (
+        "ALTER TABLE atomic_memories ADD COLUMN wins INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE atomic_memories ADD COLUMN losses INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE atomic_memories ADD COLUMN outcome_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE atomic_memories ADD COLUMN last_outcome_at TEXT",
+        "ALTER TABLE atomic_memories ADD COLUMN retired_at TEXT",
+    ):
+        try:
+            cur.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
+
+    # rules table: outcome counters (only if rules table exists)
+    try:
+        cur.execute("SELECT 1 FROM rules LIMIT 1")
+        rules_exist = True
+    except sqlite3.OperationalError:
+        rules_exist = False
+
+    if rules_exist:
+        for ddl in (
+            "ALTER TABLE rules ADD COLUMN wins INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE rules ADD COLUMN losses INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE rules ADD COLUMN last_outcome_at TEXT",
+        ):
+            try:
+                cur.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+
+    # memory_outcomes audit ledger (never auto-deleted)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS memory_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            source TEXT,
+            outcome TEXT,
+            confidence REAL,
+            memory_id INTEGER,
+            rule_id INTEGER,
+            was_exploration INTEGER DEFAULT 0,
+            created_at TEXT
+        )
+    """)
+
+
 # Ordered list of (target_version, migration_callable) pairs. Each callable
 # receives an open sqlite3.Connection and upgrades the schema to target_version.
 # Version 1 is the baseline schema (created idempotently in init_db).
 MIGRATIONS = [
     (2, _migrate_v2_atomic_memories),
     (3, _migrate_v3_actionable_and_project),
+    (4, _migrate_v4_experiential_learning),
 ]
 
 def resolve_db_path(db_path: str = None) -> str:
@@ -296,6 +348,9 @@ def init_db(db_path: str):
     # Apply v3 additive columns so fresh DBs converge with migrated ones
     # (the ALTERs are idempotent via try/except inside).
     _migrate_v3_actionable_and_project(conn)
+
+    # Apply v4 experiential-learning columns so fresh DBs converge with migrated ones.
+    _migrate_v4_experiential_learning(conn)
 
     # Apply schema versioning / migrations now that all tables exist.
     _run_migrations(conn)

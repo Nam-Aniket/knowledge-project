@@ -106,6 +106,47 @@ The mechanics that make it free and fast:
 
 ---
 
+## Experiential Learning (v0.8)
+
+Psyche captures outcome signals so the memory store can improve over time. **Important caveat: the frontier model's weights do not change.** What changes is the quality of the stored facts — bad or stale ones can be removed, and the system records which facts were present during sessions that went well versus sessions that went poorly. Ranking on outcome counters is not yet enabled; this release is capture and forgetting only.
+
+### How it works
+
+1. **Outcome capture.** When a Claude Code session ends, the `SessionEnd` hook classifies the session as `good`, `bad`, or `neutral` and calls `record_outcome` against the memory IDs that were injected during that session. Each outcome writes an audit row to `memory_outcomes` and, for non-neutral outcomes with confidence >= 0.5, increments `wins` or `losses` on the relevant `atomic_memories` rows. A per-`(memory_id, day)` cap prevents a single noisy session from inflating counters.
+
+2. **Permissioned forgetting.** You can soft-retire memories (they are hidden from retrieval but not deleted) or hard-delete them after reviewing. Retired memories have `retired_at` set and are excluded from `search_memories` and session-start injection. `unforget` clears `retired_at` and restores a memory to active status.
+
+3. **Check-in auto-scoring.** When you run `psyche checkin` and an experiment's `success_condition` contains a parseable numeric comparator (`>=`, `<=`, `>`, `<`, `=`), Psyche deterministically scores the experiment as `good` or `bad` against the latest logged metric value and records the outcome.
+
+### CLI commands
+
+```bash
+# Observability window: see what the learning loop has captured.
+psyche mem outcomes
+
+# Search your memories for candidates to forget, then review and confirm.
+psyche mem forget "<search query>"
+
+# List recently retired memories and unretire one by ID.
+psyche mem review
+psyche mem unforget <id>
+```
+
+`psyche mem outcomes` shows total outcomes captured (good/bad/neutral), a breakdown by source (transcript/mcp/checkin), top facts by observed win-rate, and forget candidates. These are session-level correlation signals only — they are NOT causal proof, and ranking is NOT yet affected by them. Ranking on outcome counters will be enabled in a future release.
+
+### MCP tools (any host)
+
+| Tool | What it does |
+|------|-------------|
+| `record_outcome` | Record `good`/`bad`/`neutral` against a list of memory IDs or rule IDs. |
+| `forget_memory` | Soft-retire memories matching a query, or hard-delete by ID with `confirm=true, hard=true`. |
+| `unforget` | Clear `retired_at` on specific IDs, restoring them to active. |
+
+> [!NOTE]
+> The durable injection ledger (`~/.psyche/sessions/<session_id>.json`) records which memory IDs were injected in each session. The `SessionEnd` hook reads this ledger to know which facts to score. The ledger is written at session start and mirrored to `/tmp` for fast reads during the session.
+
+---
+
 ## 🧭 Personal Upgrade & Guidance Engine
 
 Psyche goes beyond static memory by actively tracking your goals, experiments, and learnings across domains (Business, Health, Wealth, Career, Happiness, and Ideation). AI agents use this layer to act as your personal coach, grounded strictly in the knowledge you have ingested.
@@ -154,15 +195,18 @@ npx psyche setup
 ```
 
 ### 🧠 Give Claude Code automatic memory (hooks)
-Wire the three bundled hook scripts into `~/.claude/settings.json` so facts flow in and out of sessions with zero model overhead:
+Wire the bundled hook scripts into `~/.claude/settings.json` so facts flow in and out of sessions with zero model overhead:
 ```json
 "hooks": {
   "SessionStart":     [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_session_start.py", "timeout": 15}]}],
   "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_prompt_submit.py", "timeout": 15}]}],
+  "Stop":             [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_stop.py", "timeout": 15}]}],
   "PreCompact":       [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_extract.py", "timeout": 60}]}],
   "SessionEnd":       [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_extract.py", "timeout": 60}]}]
 }
 ```
+
+> **Incremental capture (`Stop` hook).** `SessionEnd` only fires when a session ends *cleanly* — it does not fire on idle, on an abrupt terminal close, or on a `SIGKILL`, so a session you walk away from for days may never be extracted. The `Stop` hook closes that gap: it runs at the end of every assistant turn but is **gated** — it triggers an extraction only when **N turns** *or* **T minutes** have elapsed since the last one. When it does fire, extraction runs in a detached background process so your next prompt is never blocked. Outcome classification stays on the `SessionEnd`/`PreCompact` path (the final verdict). Tune via env vars: `PSYCHE_STOP_MIN_TURNS` (default 4), `PSYCHE_STOP_MIN_MINUTES` (default 10), `PSYCHE_STOP_MIN_GROWTH` (default 800 chars). The per-session watermark lives in `~/.psyche/sessions/<session_id>.extract.json`.
 
 ### 🤝 Share one memory across Codex and Antigravity
 With the Psyche MCP server registered in `~/.codex/config.toml` and `~/.gemini/config/mcp_config.json`, drop the memory protocol block ([docs/memory-protocol.md](docs/memory-protocol.md)) into `~/.codex/AGENTS.md` and `~/.gemini/GEMINI.md`. Both agents will then read and write the same fact store Claude Code uses.

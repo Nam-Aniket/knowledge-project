@@ -2,6 +2,25 @@
 
 All notable changes to the **Psyche** project will be documented in this file.
 
+## [0.8.0] - Unreleased
+
+### Added
+- **Outcome-capture ledger**: `record_outcome(memory_ids, rule_ids, outcome, confidence, source, session_id)` increments `wins`/`losses` on `atomic_memories` and `rules` rows for non-neutral outcomes with confidence >= 0.5; writes an audit row to the new `memory_outcomes` table in all cases. A per-`(memory_id, day)` cap prevents a single session from double-counting.
+- **Automatic outcome capture at session end** (Claude Code hooks): the `SessionEnd`/`PreCompact` hook classifies the session transcript as `good`/`bad`/`neutral` using a cheap proxy-hint + LLM classifier and calls `record_outcome` against the injected IDs recovered from the durable session ledger.
+- **Incremental mid-session extraction** (`Stop` hook, `hooks/psyche_stop.py`): durable facts are now captured *during* a session, not only at `SessionEnd`/`PreCompact` — so work is preserved even if the user never exits cleanly (abrupt close, `SIGKILL`, or walking away). The hook fires every assistant turn but is gated by a pure `should_extract` function: it extracts only when `PSYCHE_STOP_MIN_TURNS` (default 4) turns *or* `PSYCHE_STOP_MIN_MINUTES` (default 10) minutes have elapsed since the last extraction, and (on the turns path) the transcript grew by at least `PSYCHE_STOP_MIN_GROWTH` (default 800) chars. The timer path bypasses the growth check so a saturated transcript window can't suppress capture. When the gate passes, extraction runs in a **detached worker** so the hook never blocks the next prompt; outcome classification is intentionally excluded (final verdict stays at session end). Per-session watermark stored at `~/.psyche/sessions/<session_id>.extract.json`. Shared logic factored into `extract_facts()`/`count_turns()` in `psyche_extract.py`.
+- **Durable injected-ID ledger**: `write_ledger` now mirrors the injected-ID set to `~/.psyche/sessions/<session_id>.json` in addition to `/tmp`; `read_injected_ids` prefers the durable copy for reliability across session-end timing.
+- **Permissioned forget/retraction**: `forget_memory(query=...)` soft-retires matching memories by setting `retired_at`; `forget_memory(ids=[...], confirm=True, hard=True)` hard-deletes. Retired memories are excluded from `search_memories` and `standing_fact_rows`. `unforget(ids)` clears `retired_at`.
+- **`psyche mem forget/review/unforget` CLI subcommands** for interactive memory management.
+- **`forget_memory`, `record_outcome`, `unforget` MCP tools** registered on the MCP server for use from any host agent.
+- **Check-in auto-scoring** (`score_experiment_completion`): when `checkin_plan` assesses an experiment, if `success_condition` contains a numeric comparator (`>=`, `<=`, `>`, `<`, `=`) and a matching metric log exists, the experiment is scored deterministically and `record_outcome` is called with `source="checkin"`.
+- **`psyche mem outcomes` subcommand**: observability window for the experiential-learning loop. Shows total outcomes, breakdown by source (transcript/mcp/checkin) and by outcome (good/bad/neutral), sessions classified, top facts by observed win-rate, forget candidates, and retired count. Ranking is NOT yet affected by these counters — capture only.
+- **Schema migration v4** (`SCHEMA_VERSION = 4`): adds `wins`, `losses`, `outcome_count`, `last_outcome_at`, `retired_at` to `atomic_memories`; `wins`, `losses`, `last_outcome_at` to `rules`; new `memory_outcomes` audit table.
+
+### Notes
+- Outcome counters (`wins`/`losses`) are captured only — they do not yet influence retrieval ranking. The ranking effect will be enabled in a future release once sufficient signal has been collected.
+
+---
+
 ## [0.7.0] - 2026-06-12
 
 ### Added

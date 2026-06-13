@@ -697,6 +697,98 @@ def main():
                                     }
                                 }
                             }
+                        },
+                        {
+                            "name": "record_outcome",
+                            "description": "Record whether previously injected memories helped. Call this when the outcome of a session or task is clearly known (good = helpful, bad = unhelpful/caused errors, neutral = unclear). Does NOT affect ranking in this version — it only captures data for future learning.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "outcome": {
+                                        "type": "string",
+                                        "enum": ["good", "bad", "neutral"],
+                                        "description": "Whether the injected memories helped (good), hurt (bad), or were unclear (neutral)"
+                                    },
+                                    "memory_ids": {
+                                        "type": "array",
+                                        "items": {"type": "integer"},
+                                        "description": "IDs of memories to score. If omitted, query is used to find likely-injected memories."
+                                    },
+                                    "query": {
+                                        "type": "string",
+                                        "description": "If memory_ids is absent, search for likely-injected memories by this query (lower confidence)."
+                                    },
+                                    "rule_ids": {
+                                        "type": "array",
+                                        "items": {"type": "integer"},
+                                        "description": "Optional rule IDs to also score."
+                                    },
+                                    "session_id": {
+                                        "type": "string",
+                                        "description": "Optional session identifier for attribution."
+                                    },
+                                    "note": {
+                                        "type": "string",
+                                        "description": "Optional note about why this outcome was assigned."
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["outcome"]
+                            }
+                        },
+                        {
+                            "name": "forget_memory",
+                            "description": "Soft-retire or hard-delete memories. Calling with a query immediately soft-retires matching memories (they stop being injected) and returns the candidates for user confirmation. To permanently delete, make a follow-up call with ids=<retired_ids>, confirm=true, hard=true AFTER the user approves. The model must NEVER hard-delete without explicit user confirmation.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": "Search query to find memories to forget. Soft-retires matches immediately."
+                                    },
+                                    "ids": {
+                                        "type": "array",
+                                        "items": {"type": "integer"},
+                                        "description": "Memory IDs to act on (for confirm=true follow-up calls)."
+                                    },
+                                    "confirm": {
+                                        "type": "boolean",
+                                        "default": False,
+                                        "description": "Set true only after the user has explicitly approved deletion."
+                                    },
+                                    "hard": {
+                                        "type": "boolean",
+                                        "default": False,
+                                        "description": "If true with confirm=true, permanently deletes the memories."
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "unforget",
+                            "description": "Restore soft-retired memories so they are injected again. Reverses a forget_memory soft-retire.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "ids": {
+                                        "type": "array",
+                                        "items": {"type": "integer"},
+                                        "description": "Memory IDs to un-retire."
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": "Optional topic/profile database name."
+                                    }
+                                },
+                                "required": ["ids"]
+                            }
                         }
                     ]
                 }
@@ -872,6 +964,68 @@ def main():
                             text_result = "\n".join(f"- {e['entity']} ({e['count']})" for e in entities)
                         else:
                             text_result = "No entities recorded yet."
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
+                    elif tool_name == "record_outcome":
+                        import memzero
+                        db_path = resolve_topic_db_path(arguments.get("topic"))
+                        memory_ids = arguments.get("memory_ids")
+                        # If no memory_ids but query given, search for likely-injected memories
+                        if not memory_ids and arguments.get("query"):
+                            results = memzero.search_memories(
+                                arguments["query"], top=8, db_path=db_path
+                            )
+                            memory_ids = [r["id"] for r in results]
+                        result = memzero.record_outcome(
+                            memory_ids=memory_ids,
+                            rule_ids=arguments.get("rule_ids"),
+                            outcome=arguments.get("outcome", "neutral"),
+                            source="mcp",
+                            session_id=arguments.get("session_id"),
+                            db_path=db_path,
+                        )
+                        text_result = (
+                            f"Recorded outcome '{result['outcome']}' for "
+                            f"{result['recorded']} item(s)."
+                        )
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
+                    elif tool_name == "forget_memory":
+                        import memzero
+                        db_path = resolve_topic_db_path(arguments.get("topic"))
+                        result = memzero.forget_memory(
+                            query=arguments.get("query"),
+                            ids=arguments.get("ids"),
+                            confirm=bool(arguments.get("confirm", False)),
+                            hard=bool(arguments.get("hard", False)),
+                            db_path=db_path,
+                        )
+                        if "deleted" in result:
+                            text_result = f"Permanently deleted {len(result['deleted'])} memory/memories: {result['deleted']}"
+                        elif result.get("mode") == "pending_confirm":
+                            lines = [
+                                f"Soft-retired {len(result['retired'])} memory/memories (now hidden from injection).",
+                                "Candidates:",
+                            ]
+                            for c in result.get("candidates", []):
+                                lines.append(f"  #{c['id']}: {c['fact']}")
+                            lines.append(
+                                f"\nTo permanently delete, call forget_memory with "
+                                f"ids={result['retired']}, confirm=true, hard=true AFTER user approves."
+                            )
+                            lines.append("To undo, call unforget with those ids.")
+                            text_result = "\n".join(lines)
+                        elif result.get("mode") == "confirmed":
+                            text_result = f"Retirement confirmed for ids: {result.get('retired', [])}"
+                        else:
+                            text_result = "No memories found to forget."
+                        resp["result"] = {"content": [{"type": "text", "text": text_result}]}
+                    elif tool_name == "unforget":
+                        import memzero
+                        db_path = resolve_topic_db_path(arguments.get("topic"))
+                        result = memzero.unforget(
+                            ids=arguments.get("ids", []),
+                            db_path=db_path,
+                        )
+                        text_result = f"Restored {len(result['unretired'])} memory/memories: {result['unretired']}"
                         resp["result"] = {"content": [{"type": "text", "text": text_result}]}
                     else:
                         resp["error"] = {
