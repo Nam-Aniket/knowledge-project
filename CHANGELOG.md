@@ -9,6 +9,7 @@ All notable changes to the **Psyche** project will be documented in this file.
 - **`CHAT_PROVIDER`**: decouples the chat model from the embedding provider (defaults to `LLM_PROVIDER`, so existing configs are unchanged), letting local-embedding users pair an Ollama/Gemini/OpenAI chat model for terminal `psyche guide`.
 - **Cache-stable injections**: the session-start memory block is now ordered by immutable `id` and rendered without per-fact dates, making it byte-stable across sessions so it no longer breaks the host model's prompt cache.
 - **Per-provider cache-exposure metric**: the token ledger records the session-start block hash and `psyche mem stats` reports how often the cacheable prefix changed across sessions, plus a clearly-labeled modeled savings estimate using a per-provider discount table (Anthropic/OpenAI/Gemini).
+- **Measured cache metrics in `psyche mem stats`**: real `cache_read`/`cache_creation` counts read from Claude Code transcripts; replaced the modeled savings figure with measured cache share + block-attributable cost-avoidance; per-project block-change metric.
 - **Protocol guidance**: the `psyche connect` protocol block now documents the synthesis-pack flow and append-only placement of memory content.
 
 ### Notes
