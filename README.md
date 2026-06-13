@@ -195,15 +195,18 @@ npx psyche setup
 ```
 
 ### 🧠 Give Claude Code automatic memory (hooks)
-Wire the three bundled hook scripts into `~/.claude/settings.json` so facts flow in and out of sessions with zero model overhead:
+Wire the bundled hook scripts into `~/.claude/settings.json` so facts flow in and out of sessions with zero model overhead:
 ```json
 "hooks": {
   "SessionStart":     [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_session_start.py", "timeout": 15}]}],
   "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_prompt_submit.py", "timeout": 15}]}],
+  "Stop":             [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_stop.py", "timeout": 15}]}],
   "PreCompact":       [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_extract.py", "timeout": 60}]}],
   "SessionEnd":       [{"hooks": [{"type": "command", "command": "<psyche>/.venv/bin/python <psyche>/hooks/psyche_extract.py", "timeout": 60}]}]
 }
 ```
+
+> **Incremental capture (`Stop` hook).** `SessionEnd` only fires when a session ends *cleanly* — it does not fire on idle, on an abrupt terminal close, or on a `SIGKILL`, so a session you walk away from for days may never be extracted. The `Stop` hook closes that gap: it runs at the end of every assistant turn but is **gated** — it triggers an extraction only when **N turns** *or* **T minutes** have elapsed since the last one. When it does fire, extraction runs in a detached background process so your next prompt is never blocked. Outcome classification stays on the `SessionEnd`/`PreCompact` path (the final verdict). Tune via env vars: `PSYCHE_STOP_MIN_TURNS` (default 4), `PSYCHE_STOP_MIN_MINUTES` (default 10), `PSYCHE_STOP_MIN_GROWTH` (default 800 chars). The per-session watermark lives in `~/.psyche/sessions/<session_id>.extract.json`.
 
 ### 🤝 Share one memory across Codex and Antigravity
 With the Psyche MCP server registered in `~/.codex/config.toml` and `~/.gemini/config/mcp_config.json`, drop the memory protocol block ([docs/memory-protocol.md](docs/memory-protocol.md)) into `~/.codex/AGENTS.md` and `~/.gemini/GEMINI.md`. Both agents will then read and write the same fact store Claude Code uses.

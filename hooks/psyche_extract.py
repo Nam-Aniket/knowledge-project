@@ -78,6 +78,42 @@ def transcript_text(path: str) -> str:
     return "\n\n".join(parts)[-MAX_TRANSCRIPT_CHARS:]
 
 
+def count_turns(path: str) -> int:
+    """Cheap count of assistant entries in the transcript — a monotonic activity
+    proxy for the Stop-hook gate (exact turn semantics don't matter here)."""
+    n = 0
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") == "assistant":
+                    n += 1
+    except Exception:
+        return 0
+    return n
+
+
+def extract_facts(payload, *, source) -> int:
+    """Resolve LLM, build transcript, extract+store durable facts. Returns the
+    count stored. Shared by the SessionEnd/PreCompact path and the Stop hook.
+    The near-duplicate guard in extract_and_store makes repeated calls safe."""
+    path = payload.get("transcript_path", "")
+    session_id = payload.get("session_id", "")
+    if not path or not os.path.exists(path):
+        return 0
+    import memzero
+    text = transcript_text(path)
+    llm = _resolve_llm()
+    project = memzero.project_key_for(hc.cwd_from_payload(payload))
+    stored = memzero.extract_and_store(text, agent_id="claude-code",
+                                       run_id=session_id, project=project, llm=llm)
+    hc.log(f"extract {session_id} ({source}) via {getattr(llm, 'chat_model', '?')}: stored {len(stored)} facts")
+    return len(stored)
+
+
 import re as _re
 
 _CORRECTION_RE = _re.compile(
@@ -145,16 +181,13 @@ def main():
     path = payload.get("transcript_path", "")
     if not path or not os.path.exists(path):
         return
-    import memzero
-    text = transcript_text(path)
-    llm = _resolve_llm()
-    project = memzero.project_key_for(hc.cwd_from_payload(payload))
-    stored = memzero.extract_and_store(text, agent_id="claude-code", run_id=session_id,
-                                       project=project, llm=llm)
-    hc.log(f"extract {session_id} ({payload.get('hook_event_name')}) via {getattr(llm, 'chat_model', '?')}: stored {len(stored)} facts")
+    extract_facts(payload, source=payload.get("hook_event_name") or "session")
 
-    # Outcome classifier — never breaks the hook
+    # Outcome classifier — never breaks the hook. Final verdict only runs here
+    # (SessionEnd/PreCompact), never mid-session from the Stop hook.
     try:
+        text = transcript_text(path)
+        llm = _resolve_llm()
         injected_ids = hc.read_injected_ids(session_id)
         if injected_ids and getattr(llm, "chat_model", "none") != "none":
             hints = _proxy_hints(text)
